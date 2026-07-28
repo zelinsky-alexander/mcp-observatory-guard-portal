@@ -12,21 +12,28 @@ class ConfigurationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class AnalysisConfig:
+    jobs_database_path: Path
+    observatory_binary: Path
+    rules_path: Path
+    evidence_root: Path
+    timeout_seconds: int = 900
+    maximum_output_bytes: int = 65536
+    poll_seconds: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     database_path: Path
     host: str = "127.0.0.1"
     port: int = 8080
     page_size: int = 50
+    analysis: AnalysisConfig | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
-        raw_database = os.environ.get("MCP_PORTAL_DATABASE", "").strip()
-        if not raw_database:
-            raise ConfigurationError("MCP_PORTAL_DATABASE must name an Observatory SQLite database")
-
-        database_path = Path(raw_database).expanduser().resolve()
-        if not database_path.is_file():
-            raise ConfigurationError(f"database does not exist or is not a file: {database_path}")
+        database_path = _existing_file("MCP_PORTAL_DATABASE", required=True)
+        assert database_path is not None
 
         host = os.environ.get("MCP_PORTAL_HOST", "127.0.0.1").strip()
         if not host:
@@ -34,7 +41,87 @@ class Config:
 
         port = _bounded_integer("MCP_PORTAL_PORT", 8080, minimum=1, maximum=65535)
         page_size = _bounded_integer("MCP_PORTAL_PAGE_SIZE", 50, minimum=1, maximum=100)
-        return cls(database_path=database_path, host=host, port=port, page_size=page_size)
+        analysis = None
+        if _enabled("MCP_PORTAL_ENABLE_ANALYSIS"):
+            if host not in {"127.0.0.1", "localhost", "::1"}:
+                raise ConfigurationError(
+                    "on-demand analysis is restricted to a loopback portal in this milestone"
+                )
+            jobs_database_path = _writable_database_path("MCP_PORTAL_JOBS_DATABASE")
+            observatory_binary = _existing_file("MCP_PORTAL_OBSERVATORY_BINARY", required=True)
+            rules_path = _existing_file("MCP_PORTAL_ANALYSIS_RULES", required=True)
+            evidence_root = _directory_path("MCP_PORTAL_EVIDENCE_ROOT")
+            assert observatory_binary is not None and rules_path is not None
+            if not os.access(observatory_binary, os.X_OK):
+                raise ConfigurationError(
+                    f"MCP_PORTAL_OBSERVATORY_BINARY is not executable: {observatory_binary}"
+                )
+            analysis = AnalysisConfig(
+                jobs_database_path=jobs_database_path,
+                observatory_binary=observatory_binary,
+                rules_path=rules_path,
+                evidence_root=evidence_root,
+                timeout_seconds=_bounded_integer(
+                    "MCP_PORTAL_ANALYSIS_TIMEOUT_SECONDS", 900, minimum=30, maximum=7200
+                ),
+                maximum_output_bytes=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_OUTPUT_BYTES", 65536, minimum=4096, maximum=1048576
+                ),
+                poll_seconds=_bounded_integer(
+                    "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
+                ),
+            )
+
+        return cls(
+            database_path=database_path,
+            host=host,
+            port=port,
+            page_size=page_size,
+            analysis=analysis,
+        )
+
+
+def _enabled(name: str) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in {"", "0", "false", "no"}:
+        return False
+    if raw in {"1", "true", "yes"}:
+        return True
+    raise ConfigurationError(f"{name} must be one of 0, 1, false, true, no, or yes")
+
+
+def _existing_file(name: str, *, required: bool) -> Path | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        if required:
+            raise ConfigurationError(f"{name} must name an existing file")
+        return None
+    path = Path(raw).expanduser().resolve()
+    if not path.is_file():
+        raise ConfigurationError(f"{name} does not name a file: {path}")
+    return path
+
+
+def _writable_database_path(name: str) -> Path:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        raise ConfigurationError(f"{name} must name the portal-owned queue database")
+    path = Path(raw).expanduser().resolve()
+    if path.exists() and not path.is_file():
+        raise ConfigurationError(f"{name} is not a regular file: {path}")
+    if not path.parent.is_dir():
+        raise ConfigurationError(f"parent directory does not exist for {name}: {path.parent}")
+    return path
+
+
+def _directory_path(name: str) -> Path:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        raise ConfigurationError(f"{name} must name an existing evidence directory")
+    path = Path(raw).expanduser().resolve()
+    if not path.is_dir():
+        raise ConfigurationError(f"{name} does not name a directory: {path}")
+    return path
 
 
 def _bounded_integer(name: str, default: int, *, minimum: int, maximum: int) -> int:
