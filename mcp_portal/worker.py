@@ -189,9 +189,9 @@ def _terminate_group(process: subprocess.Popen[bytes]) -> None:
 
 def _minimal_environment() -> dict[str, str]:
     environment = {
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "HOME": os.environ.get("HOME", "/tmp"),
-        "LANG": os.environ.get("LANG", "C.UTF-8"),
+        "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "HOME": "/tmp",
+        "LANG": "C.UTF-8",
     }
     for name in (
         "DOCKER_HOST",
