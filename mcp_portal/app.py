@@ -229,14 +229,17 @@ class PortalHandler(BaseHTTPRequestHandler):
         return parse_qs(body.decode("utf-8", errors="strict"), keep_blank_values=True)
 
     def _validate_same_origin(self) -> None:
+        """Reject browser requests explicitly identified as cross-site.
+
+        Analysis-enabled mode is restricted to a loopback bind, and every
+        submission also requires a per-package HMAC CSRF token. Comparing the
+        browser Origin header to the server address is intentionally avoided
+        because Windows-to-WSL localhost forwarding can represent equivalent
+        loopback origins differently.
+        """
         fetch_site = self.headers.get("Sec-Fetch-Site")
         if fetch_site and fetch_site not in {"same-origin", "none"}:
             raise ValueError("cross-site analysis requests are not accepted")
-        origin = self.headers.get("Origin")
-        if origin:
-            parsed = urlsplit(origin)
-            if parsed.scheme != "http" or parsed.netloc != self.headers.get("Host"):
-                raise ValueError("analysis request origin does not match the portal")
 
     def _redirect(self, location: str) -> None:
         self.send_response(HTTPStatus.SEE_OTHER.value)
