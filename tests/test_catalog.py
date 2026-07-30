@@ -59,6 +59,16 @@ class CatalogTests(unittest.TestCase):
             ],
         )
 
+    def test_unreviewed_high_or_critical_findings(self) -> None:
+        result = self.catalog.unreviewed_high_or_critical_findings(
+            page=1, page_size=20
+        )
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["rows"][0]["id"], 1)
+        self.assertEqual(result["rows"][0]["analysis_run_id"], 100)
+        self.assertEqual(result["rows"][0]["server_identifier"], "io.example/filesystem")
+        self.assertEqual(result["rows"][0]["package_identifier"], "@example/filesystem")
+
     def test_server_detail_includes_packages_and_analysis(self) -> None:
         detail = self.catalog.server_detail("io.example/filesystem")
         self.assertIsNotNone(detail)

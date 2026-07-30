@@ -56,6 +56,11 @@ class HttpTests(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
             self.assertIn("Recently imported registry records", body)
+            self.assertIn(
+                'href="/findings/unreviewed-high-or-critical">'
+                "Unreviewed high or critical findings</a>",
+                body,
+            )
             self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
 
         with urlopen(self.base_url + "/servers/io.example%2Ffilesystem", timeout=2) as response:
@@ -63,6 +68,23 @@ class HttpTests(unittest.TestCase):
             self.assertIn("@example/filesystem", body)
             self.assertIn("Static analysis history", body)
             self.assertIn("on-demand analysis is disabled", body)
+
+    def test_unreviewed_high_or_critical_findings_report(self) -> None:
+        self._start(False)
+        with urlopen(
+            self.base_url + "/findings/unreviewed-high-or-critical", timeout=2
+        ) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("Unreviewed high or critical findings", body)
+            self.assertIn("Process execution API", body)
+            self.assertIn("io.example/filesystem", body)
+            self.assertIn("@example/filesystem", body)
+            self.assertIn(
+                'href="/analyses/100#finding-1"',
+                body,
+            )
+            self.assertIn("not a safety verdict", body)
 
     def test_search_escapes_database_text(self) -> None:
         self._start(False)

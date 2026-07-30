@@ -24,6 +24,7 @@ from .views import (
     jobs_page,
     server_detail_page,
     servers_page,
+    unreviewed_findings_page,
 )
 
 
@@ -111,6 +112,18 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_html(
                     HTTPStatus.OK,
                     ecosystem_report_page(rows),
+                    include_body=include_body,
+                )
+                return
+            if target.path == "/findings/unreviewed-high-or-critical":
+                parameters = parse_qs(target.query, keep_blank_values=True)
+                page = _positive_integer(parameters.get("page", ["1"])[0], fallback=1)
+                result = self.server.catalog.unreviewed_high_or_critical_findings(
+                    page=page, page_size=self.server.page_size
+                )
+                self._send_html(
+                    HTTPStatus.OK,
+                    unreviewed_findings_page(result),
                     include_body=include_body,
                 )
                 return

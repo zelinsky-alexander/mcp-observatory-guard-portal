@@ -28,12 +28,27 @@ def dashboard_page(data: dict[str, Any]) -> str:
     if latest:
         snapshot_text = f"{escape(_text(latest['completed_at']))} · {escape(_short_hash(latest['snapshot_sha256']))}"
     cards = "".join(
-        _card(label, value, detail)
-        for label, value, detail in (
-            ("Servers", totals["servers"], "Distinct registry identifiers"),
-            ("Immutable records", totals["immutable_versions"], "Version and metadata variants"),
-            ("Completed analyses", analysis["completed"], "Static package analysis runs"),
-            ("Review queue", analysis["unreviewed_high_or_critical"], "Unreviewed high or critical findings"),
+        _card(label, value, detail, detail_href)
+        for label, value, detail, detail_href in (
+            ("Servers", totals["servers"], "Distinct registry identifiers", None),
+            (
+                "Immutable records",
+                totals["immutable_versions"],
+                "Version and metadata variants",
+                None,
+            ),
+            (
+                "Completed analyses",
+                analysis["completed"],
+                "Static package analysis runs",
+                None,
+            ),
+            (
+                "Review queue",
+                analysis["unreviewed_high_or_critical"],
+                "Unreviewed high or critical findings",
+                "/findings/unreviewed-high-or-critical",
+            ),
         )
     )
     changes_rows = "".join(_server_row(row) for row in data["changes"]) or '<tr><td colspan="5" class="empty">No records are linked to the latest snapshot.</td></tr>'
@@ -88,6 +103,28 @@ def ecosystem_report_page(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def unreviewed_findings_page(result: dict[str, Any]) -> str:
+    rows = "".join(_unreviewed_finding_row(row) for row in result["rows"]) or (
+        '<tr><td colspan="6" class="empty">'
+        "No unreviewed high or critical findings.</td></tr>"
+    )
+    total_pages = max(1, ceil(result["total"] / result["page_size"]))
+    pagination = _pagination(
+        "/findings/unreviewed-high-or-critical",
+        "",
+        result["page"],
+        total_pages,
+        aria_label="Finding pages",
+    )
+    return layout(
+        "Unreviewed high or critical findings",
+        f"""<section class="page-heading"><p class="eyebrow">Review queue</p><h1>Unreviewed high or critical findings</h1><p>Static-analysis findings awaiting a review disposition.</p></section>
+<div class="result-summary">{result['total']:,} finding{'s' if result['total'] != 1 else ''} · page {result['page']} of {total_pages}</div>
+<section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Severity</th><th>Finding</th><th>Server</th><th>Package</th><th>Location</th><th>Analyzed</th></tr></thead><tbody>{rows}</tbody></table></div></section>{pagination}
+<section class="notice"><strong>Review boundary:</strong> an unreviewed finding is an observation awaiting disposition, not a safety verdict.</section>""",
+    )
+
+
 def server_detail_page(data: dict[str, Any]) -> str:
     identifier = data["server_identifier"]
     sections = "".join(_version_section(version) for version in data["versions"])
@@ -95,7 +132,7 @@ def server_detail_page(data: dict[str, Any]) -> str:
 
 
 def analysis_detail_page(run: dict[str, Any]) -> str:
-    findings = "".join(f"""<article class="finding severity-{escape(_text(item['severity']))}"><div class="finding-header"><span class="badge">{escape(_text(item['severity']))}</span><strong>{escape(_text(item['title']))}</strong></div><div class="meta">{escape(_text(item['rule_id']))} · {escape(_text(item['disposition']))} · confidence {escape(_text(item['confidence']))}</div><p><code>{escape(_text(item['subject_path']))}{':' + str(item['line_number']) if item['line_number'] else ''}</code></p><p>{escape(_text(item['explanation']))}</p></article>""" for item in run["findings"]) or '<p class="empty">No findings were recorded for this run.</p>'
+    findings = "".join(f"""<article id="finding-{item['id']}" class="finding severity-{escape(_text(item['severity']))}"><div class="finding-header"><span class="badge">{escape(_text(item['severity']))}</span><strong>{escape(_text(item['title']))}</strong></div><div class="meta">{escape(_text(item['rule_id']))} · {escape(_text(item['disposition']))} · confidence {escape(_text(item['confidence']))}</div><p><code>{escape(_text(item['subject_path']))}{':' + str(item['line_number']) if item['line_number'] else ''}</code></p><p>{escape(_text(item['explanation']))}</p></article>""" for item in run["findings"]) or '<p class="empty">No findings were recorded for this run.</p>'
     evidence = "".join(f"<li><code>{escape(_text(item['relative_path']))}</code> · {item['byte_size']:,} bytes · {escape(_short_hash(item['sha256']))}</li>" for item in run["evidence_files"]) or "<li>No finalized evidence rows.</li>"
     body = f"""<section class="page-heading"><p class="eyebrow">Static analysis run #{run['id']}</p><h1>{escape(_text(run['server_identifier']))} <span class="muted">{escape(_text(run['server_version']))}</span></h1><p><span class="badge status-{escape(_text(run['status']))}">{escape(_text(run['status']))}</span> package <code>{escape(_text(run['package_identifier']))}</code></p></section>
 <section class="cards">{_card('Artifact', _short_hash(run.get('artifact_sha256')), 'SHA-256 digest')}{_card('Ruleset', _text(run.get('ruleset_version')), 'Static-analysis policy')}{_card('Network', _text(run.get('network_mode')), 'Worker network profile')}{_card('Integrity', 'verified' if run.get('integrity_verified') else 'not verified', 'Published package integrity')}</section><section class="panel"><h2>Findings</h2>{findings}</section><section class="panel"><h2>Evidence manifest</h2><ul class="evidence-list">{evidence}</ul></section><section class="notice"><strong>Limit:</strong> this is static package analysis. It does not execute package entry points, lifecycle scripts, or MCP tools.</section>"""
@@ -182,12 +219,36 @@ def _analysis_row(row: dict[str, Any]) -> str:
     return f'<tr><td><a href="/analyses/{row["id"]}">#{row["id"]}</a> <span class="badge status-{escape(_text(row["status"]))}">{escape(_text(row["status"]))}</span></td><td>{escape(_text(row["server_identifier"]))}<div class="meta">{escape(_text(row["server_version"]))}</div></td><td>{escape(_text(row["package_identifier"]))}</td><td>{findings}</td><td>{escape(_text(row["started_at"]))}</td></tr>'
 
 
+def _unreviewed_finding_row(row: dict[str, Any]) -> str:
+    location = escape(_text(row["subject_path"], "—"))
+    if row.get("line_number") is not None:
+        location += ":" + escape(str(row["line_number"]))
+    return (
+        f'<tr><td><span class="badge severity-{escape(_text(row["severity"]))}">'
+        f'{escape(_text(row["severity"]))}</span></td>'
+        f'<td><a href="/analyses/{row["analysis_run_id"]}#finding-{row["id"]}">'
+        f'{escape(_text(row["title"]))}</a>'
+        f'<div class="meta">{escape(_text(row["rule_id"]))} · '
+        f'confidence {escape(_text(row["confidence"]))}</div></td>'
+        f'<td>{escape(_text(row["server_identifier"]))}'
+        f'<div class="meta">{escape(_text(row["server_version"]))}</div></td>'
+        f'<td>{escape(_text(row["package_identifier"]))}</td>'
+        f"<td><code>{location}</code></td>"
+        f'<td>{escape(_text(row["started_at"]))}</td></tr>'
+    )
+
+
 def _job_row(job: dict[str, Any]) -> str:
     return f'<tr><td><a href="/jobs/{job["id"]}">#{job["id"]}</a></td><td>{escape(_text(job["server_identifier"]))}<div class="meta">{escape(_text(job["server_version"]))}</div></td><td>{escape(_text(job["package_identifier"]))}</td><td><span class="badge status-{escape(_text(job["status"]))}">{escape(_text(job["status"]))}</span></td><td>{escape(_text(job["requested_at"]))}</td></tr>'
 
 
-def _card(label: str, value: Any, detail: str) -> str:
-    return f'<article class="card"><span>{escape(str(label))}</span><strong>{escape(str(value))}</strong><small>{escape(detail)}</small></article>'
+def _card(label: str, value: Any, detail: str, detail_href: str | None = None) -> str:
+    safe_detail = escape(detail)
+    if detail_href is not None:
+        safe_detail = (
+            f'<a href="{escape(detail_href, quote=True)}">{safe_detail}</a>'
+        )
+    return f'<article class="card"><span>{escape(str(label))}</span><strong>{escape(str(value))}</strong><small>{safe_detail}</small></article>'
 
 
 def _pagination(
@@ -197,6 +258,7 @@ def _pagination(
     total_pages: int,
     *,
     ecosystem: str = "",
+    aria_label: str = "Server pages",
 ) -> str:
     if total_pages <= 1:
         return ""
@@ -208,7 +270,11 @@ def _pagination(
     links.append(f"<span>Page {page} of {total_pages}</span>")
     if page < total_pages:
         links.append(_page_link(base, query, page + 1, "Next →", ecosystem=ecosystem))
-    return '<nav class="pagination" aria-label="Server pages">' + "".join(links) + "</nav>"
+    return (
+        f'<nav class="pagination" aria-label="{escape(aria_label, quote=True)}">'
+        + "".join(links)
+        + "</nav>"
+    )
 
 
 def _page_link(

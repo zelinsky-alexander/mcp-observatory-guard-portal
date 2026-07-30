@@ -214,6 +214,67 @@ class Catalog:
                 ).fetchall()
             )
 
+    def unreviewed_high_or_critical_findings(
+        self, *, page: int, page_size: int
+    ) -> dict[str, Any]:
+        """List the findings counted by the dashboard review-queue card."""
+        if page < 1:
+            page = 1
+        if not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100")
+
+        status = self.schema_status()
+        if not status["analysis_available"]:
+            return {
+                "page": page,
+                "page_size": page_size,
+                "total": 0,
+                "rows": [],
+            }
+
+        offset = (page - 1) * page_size
+        with self._connect() as connection:
+            total = int(
+                connection.execute(
+                    """
+                    SELECT COUNT(*) FROM analysis_findings
+                    WHERE disposition='unreviewed'
+                      AND severity IN ('high','critical')
+                    """
+                ).fetchone()[0]
+            )
+            rows = _rows_to_dicts(
+                connection.execute(
+                    """
+                    SELECT af.id, af.analysis_run_id, af.rule_id, af.category,
+                           af.severity, af.confidence, af.disposition,
+                           af.subject_path, af.line_number, af.symbol,
+                           af.title, af.explanation,
+                           ar.started_at,
+                           sv.server_identifier, sv.server_version,
+                           p.identifier AS package_identifier
+                    FROM analysis_findings af
+                    JOIN analysis_runs ar ON ar.id=af.analysis_run_id
+                    JOIN server_versions sv ON sv.id=ar.server_version_id
+                    JOIN packages p ON p.id=ar.package_id
+                    WHERE af.disposition='unreviewed'
+                      AND af.severity IN ('high','critical')
+                    ORDER BY CASE af.severity
+                                 WHEN 'critical' THEN 0 ELSE 1 END,
+                             ar.started_at COLLATE BINARY DESC,
+                             af.id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (page_size, offset),
+                ).fetchall()
+            )
+        return {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "rows": rows,
+        }
+
     def search_servers(
         self,
         query: str,
