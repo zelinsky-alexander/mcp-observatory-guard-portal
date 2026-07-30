@@ -11,32 +11,77 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from mcp_portal.app import create_server
-from mcp_portal.config import AnalysisConfig, Config
+from mcp_portal.config import (
+    AnalysisConfig,
+    Config,
+    EvidenceConfig,
+    ReviewConfig,
+)
 from fixture_catalog import create_fixture
 
 
 class HttpTests(unittest.TestCase):
-    def _start(self, analysis: bool) -> None:
+    def _start(
+        self, analysis: bool, *, evidence: bool = False, review: bool = False
+    ) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         database = root / "catalog.sqlite"
         create_fixture(database)
         config = Config(database_path=database, host="127.0.0.1", port=0, page_size=20)
-        if analysis:
+        if analysis or evidence or review:
             binary = root / "fake-observatory"
-            binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            binary.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json, sys\n"
+                "if sys.argv[1:3] == ['evidence', 'finding-source']:\n"
+                " if sys.argv[sys.argv.index('--format') + 1] == 'raw':\n"
+                "  sys.stdout.write('complete verified source\\n')\n"
+                " else:\n"
+                "  print(json.dumps({'status':'completed','finding_id':1,"
+                "'analysis_run_id':100,'subject_path':'package/index.js',"
+                "'line_number':2,'sha256':'f'*64,'byte_size':200000,"
+                "'displayed_byte_size':19,'start_line':1,"
+                "'truncated_before':False,'truncated_after':True,"
+                "'starts_mid_line':False,'ends_mid_line':True,"
+                "'content':'first\\n<script>\\nlast'}))\n"
+                "elif sys.argv[1:3] == ['review', 'finding']:\n"
+                " print(json.dumps({'status':'completed','review_id':9,"
+                "'finding_id':1,'disposition':'expected'}))\n"
+                "else:\n"
+                " print(json.dumps({'status':'completed','analysis_run_id':321,"
+                "'artifact_sha256':'a'*64,'reused_existing':False}))\n",
+                encoding="utf-8",
+            )
             binary.chmod(0o755)
+        analysis_config = None
+        evidence_config = None
+        review_config = None
+        if analysis:
             rules = root / "rules.json"
             rules.write_text("{}", encoding="utf-8")
-            evidence = root / "evidence"
-            evidence.mkdir()
-            config = Config(
-                database_path=database,
-                host="127.0.0.1",
-                port=0,
-                page_size=20,
-                analysis=AnalysisConfig(root / "jobs.sqlite", binary, rules, evidence),
+            evidence_root = root / "evidence"
+            evidence_root.mkdir()
+            analysis_config = AnalysisConfig(
+                root / "jobs.sqlite", binary, rules, evidence_root
             )
+        if evidence:
+            evidence_root = root / "evidence"
+            evidence_root.mkdir(exist_ok=True)
+            evidence_config = EvidenceConfig(binary, evidence_root)
+        if review:
+            review_config = ReviewConfig(
+                root / "jobs.sqlite", binary, "http-test-reviewer"
+            )
+        config = Config(
+            database_path=database,
+            host="127.0.0.1",
+            port=0,
+            page_size=20,
+            analysis=analysis_config,
+            evidence=evidence_config,
+            review=review_config,
+        )
         self.server = create_server(config)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -85,6 +130,73 @@ class HttpTests(unittest.TestCase):
                 body,
             )
             self.assertIn("not a safety verdict", body)
+
+    def test_finding_source_and_review_submission(self) -> None:
+        self._start(False, evidence=True, review=True)
+        with urlopen(self.base_url + "/analyses/100", timeout=2) as response:
+            body = response.read().decode("utf-8")
+            self.assertIn('href="/findings/1/source"', body)
+            self.assertIn('action="/review-requests"', body)
+        token_match = re.search(
+            r'action="/review-requests".*?name="csrf_token" value="([0-9a-f]+)"',
+            body,
+        )
+        self.assertIsNotNone(token_match)
+
+        with urlopen(self.base_url + "/findings/1/source", timeout=2) as response:
+            source_body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("package/index.js", source_body)
+            self.assertIn("&lt;script&gt;", source_body)
+            self.assertNotIn("<script>", source_body)
+            self.assertIn("source-line-target", source_body)
+            self.assertIn(
+                'href="/findings/1/source/download"', source_body
+            )
+            self.assertIn("Download complete verified file", source_body)
+
+        with urlopen(
+            self.base_url + "/findings/1/source/download", timeout=2
+        ) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"complete verified source\n")
+            self.assertEqual(
+                response.headers["Content-Type"], "application/octet-stream"
+            )
+            self.assertEqual(
+                response.headers["Content-Disposition"],
+                'attachment; filename="index.js"',
+            )
+
+        payload = urlencode(
+            {
+                "finding_id": "1",
+                "expected_disposition": "unreviewed",
+                "disposition": "expected",
+                "csrf_token": token_match.group(1),
+            }
+        )
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=2
+        )
+        connection.request(
+            "POST",
+            "/review-requests",
+            body=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": self.host_header,
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader("Location"), "/review-jobs/1")
+        job = self.server.jobs.get_review(1)
+        self.assertEqual(job["status"], "queued")
+        self.assertEqual(job["disposition"], "expected")
+        self.assertEqual(job["reviewer"], "http-test-reviewer")
 
     def test_search_escapes_database_text(self) -> None:
         self._start(False)

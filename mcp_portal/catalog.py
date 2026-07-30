@@ -36,6 +36,7 @@ class Catalog:
         "analysis_dependencies",
         "analysis_evidence",
     }
+    REVIEW_TABLE = "analysis_finding_reviews"
 
     def __init__(self, database_path: Path):
         self._database_path = database_path.resolve()
@@ -78,12 +79,18 @@ class Catalog:
             if row is None:
                 raise CatalogError("schema_info does not contain the singleton schema row")
             version = int(row["schema_version"])
-            if version not in (1, 2):
+            if version not in (1, 2, 3):
                 raise CatalogError(f"unsupported Observatory schema version: {version}")
+            if version == 3 and self.REVIEW_TABLE not in tables:
+                raise CatalogError(
+                    "incompatible Observatory catalog; missing table: "
+                    + self.REVIEW_TABLE
+                )
             return {
                 "schema_version": version,
                 "search_mode": row["search_mode"],
                 "analysis_available": self.ANALYSIS_TABLES.issubset(tables),
+                "review_available": self.REVIEW_TABLE in tables,
             }
 
     def dashboard(self, *, recent_limit: int = 12) -> dict[str, Any]:
@@ -524,6 +531,28 @@ class Catalog:
                     (analysis_run_id,),
                 ).fetchall()
             )
+            reviews_by_finding: dict[int, list[dict[str, Any]]] = {}
+            if self.schema_status()["review_available"]:
+                for review in _rows_to_dicts(
+                    connection.execute(
+                        """
+                        SELECT r.id, r.finding_id, r.previous_disposition,
+                               r.disposition, r.reviewer, r.reviewed_at
+                        FROM analysis_finding_reviews r
+                        JOIN analysis_findings af ON af.id=r.finding_id
+                        WHERE af.analysis_run_id=?
+                        ORDER BY r.id DESC
+                        """,
+                        (analysis_run_id,),
+                    ).fetchall()
+                ):
+                    reviews_by_finding.setdefault(
+                        int(review["finding_id"]), []
+                    ).append(review)
+            for finding in run["findings"]:
+                finding["reviews"] = reviews_by_finding.get(
+                    int(finding["id"]), []
+                )
             run["evidence_files"] = _rows_to_dicts(
                 connection.execute(
                     """
@@ -535,6 +564,22 @@ class Catalog:
                 ).fetchall()
             )
             return run
+
+    def finding_source_metadata(
+        self, finding_id: int
+    ) -> dict[str, Any] | None:
+        if finding_id <= 0 or not self.schema_status()["analysis_available"]:
+            return None
+        with self._connect() as connection:
+            return _row_to_dict(
+                connection.execute(
+                    """
+                    SELECT id, analysis_run_id, subject_path, line_number
+                    FROM analysis_findings WHERE id=?
+                    """,
+                    (finding_id,),
+                ).fetchone()
+            )
 
 
 def _escape_like(value: str) -> str:

@@ -132,11 +132,73 @@ def server_detail_page(data: dict[str, Any]) -> str:
 
 
 def analysis_detail_page(run: dict[str, Any]) -> str:
-    findings = "".join(f"""<article id="finding-{item['id']}" class="finding severity-{escape(_text(item['severity']))}"><div class="finding-header"><span class="badge">{escape(_text(item['severity']))}</span><strong>{escape(_text(item['title']))}</strong></div><div class="meta">{escape(_text(item['rule_id']))} · {escape(_text(item['disposition']))} · confidence {escape(_text(item['confidence']))}</div><p><code>{escape(_text(item['subject_path']))}{':' + str(item['line_number']) if item['line_number'] else ''}</code></p><p>{escape(_text(item['explanation']))}</p></article>""" for item in run["findings"]) or '<p class="empty">No findings were recorded for this run.</p>'
+    findings = "".join(
+        _finding_article(item) for item in run["findings"]
+    ) or '<p class="empty">No findings were recorded for this run.</p>'
     evidence = "".join(f"<li><code>{escape(_text(item['relative_path']))}</code> · {item['byte_size']:,} bytes · {escape(_short_hash(item['sha256']))}</li>" for item in run["evidence_files"]) or "<li>No finalized evidence rows.</li>"
     body = f"""<section class="page-heading"><p class="eyebrow">Static analysis run #{run['id']}</p><h1>{escape(_text(run['server_identifier']))} <span class="muted">{escape(_text(run['server_version']))}</span></h1><p><span class="badge status-{escape(_text(run['status']))}">{escape(_text(run['status']))}</span> package <code>{escape(_text(run['package_identifier']))}</code></p></section>
 <section class="cards">{_card('Artifact', _short_hash(run.get('artifact_sha256')), 'SHA-256 digest')}{_card('Ruleset', _text(run.get('ruleset_version')), 'Static-analysis policy')}{_card('Network', _text(run.get('network_mode')), 'Worker network profile')}{_card('Integrity', 'verified' if run.get('integrity_verified') else 'not verified', 'Published package integrity')}</section><section class="panel"><h2>Findings</h2>{findings}</section><section class="panel"><h2>Evidence manifest</h2><ul class="evidence-list">{evidence}</ul></section><section class="notice"><strong>Limit:</strong> this is static package analysis. It does not execute package entry points, lifecycle scripts, or MCP tools.</section>"""
     return layout(f"Analysis #{run['id']}", body)
+
+
+def finding_source_page(source: dict[str, Any]) -> str:
+    target_line = source.get("line_number")
+    rendered_lines = []
+    source_lines = source["content"].splitlines()
+    for number, line in enumerate(
+        source_lines, start=source["start_line"]
+    ):
+        classes = "source-line"
+        if number == target_line:
+            classes += " source-line-target"
+        fragment = ""
+        if number == source["start_line"] and source["starts_mid_line"]:
+            fragment = '<span class="source-fragment">…</span>'
+        trailing_fragment = ""
+        if (
+            number == source["start_line"] + len(source_lines) - 1
+            and source["ends_mid_line"]
+        ):
+            trailing_fragment = '<span class="source-fragment">…</span>'
+        rendered_lines.append(
+            f'<span class="{classes}"><span class="source-line-number">'
+            f'{number}</span><span class="source-line-content">'
+            f"{fragment}{escape(line)}{trailing_fragment}</span></span>"
+        )
+    if not rendered_lines:
+        rendered_lines.append(
+            f'<span class="source-line"><span class="source-line-number">'
+            f'{source["start_line"]}</span><span class="source-line-content">'
+            "</span></span>"
+        )
+    before = (
+        '<div class="source-truncation">Earlier verified source omitted</div>'
+        if source["truncated_before"]
+        else ""
+    )
+    after = (
+        '<div class="source-truncation">Later verified source omitted</div>'
+        if source["truncated_after"]
+        else ""
+    )
+    window = ""
+    if source["displayed_byte_size"] != source["byte_size"]:
+        window = (
+            f" · showing {source['displayed_byte_size']:,} verified bytes "
+            f"around the finding"
+        )
+    download = ""
+    if source["truncated_before"] or source["truncated_after"]:
+        download = (
+            '<p class="source-download-row"><a class="source-download" '
+            f'href="/findings/{source["finding_id"]}/source/download">'
+            f'Download complete verified file ({source["byte_size"]:,} bytes)'
+            "</a></p>"
+        )
+    body = f"""<section class="page-heading"><p class="eyebrow">Finding #{source['finding_id']} source evidence</p><h1>{escape(_text(source['subject_path']))}</h1><p>Analysis run <a href="/analyses/{source['analysis_run_id']}#finding-{source['finding_id']}">#{source['analysis_run_id']}</a> · SHA-256 <code>{escape(_short_hash(source['sha256']))}</code> · {source['byte_size']:,} bytes{window}</p></section>
+{download}<section class="panel source-panel">{before}<pre class="source-code">{"".join(rendered_lines)}</pre>{after}</section>
+<section class="notice"><strong>Evidence boundary:</strong> this is verified text from the exact analyzed package artifact. It is not executed by the portal.</section>"""
+    return layout(f"Source for finding #{source['finding_id']}", body)
 
 
 def jobs_page(summary: dict[str, Any] | None) -> str:
@@ -144,7 +206,19 @@ def jobs_page(summary: dict[str, Any] | None) -> str:
         return layout("Analysis queue", '<section class="page-heading"><p class="eyebrow">On-demand analysis</p><h1>Analysis queue disabled</h1><p>Enable the local analysis configuration to submit static package jobs.</p></section>')
     rows = "".join(_job_row(job) for job in summary["recent"]) or '<tr><td colspan="5" class="empty">No analysis jobs have been submitted.</td></tr>'
     cards = "".join(_card(name.title(), summary[name], "Portal-owned job state") for name in ("queued", "running", "completed", "failed"))
-    return layout("Analysis queue", f"""<section class="page-heading"><p class="eyebrow">On-demand analysis</p><h1>Static-analysis queue</h1><p>Only exact npm package records already present in the Observatory catalog can be submitted.</p></section><section class="cards">{cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Server</th><th>Package</th><th>Status</th><th>Requested</th></tr></thead><tbody>{rows}</tbody></table></div></section>""")
+    review = summary["review"]
+    review_rows = "".join(
+        _review_job_row(job) for job in review["recent"]
+    ) or '<tr><td colspan="5" class="empty">No review jobs have been submitted.</td></tr>'
+    review_cards = "".join(
+        _card(
+            name.title(),
+            review[name],
+            "Portal-owned review job state",
+        )
+        for name in ("queued", "running", "completed", "failed")
+    )
+    return layout("Analysis queue", f"""<section class="page-heading"><p class="eyebrow">Constrained local orchestration</p><h1>Analysis and review queues</h1><p>Only existing internal catalog identifiers and fixed operations can be submitted.</p></section><h2>Static-analysis jobs</h2><section class="cards">{cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Server</th><th>Package</th><th>Status</th><th>Requested</th></tr></thead><tbody>{rows}</tbody></table></div></section><h2>Finding-review jobs</h2><section class="cards">{review_cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Finding</th><th>Transition</th><th>Status</th><th>Requested</th></tr></thead><tbody>{review_rows}</tbody></table></div></section>""")
 
 
 def job_detail_page(job: dict[str, Any]) -> str:
@@ -156,6 +230,23 @@ def job_detail_page(job: dict[str, Any]) -> str:
     error = f'<section class="notice danger"><strong>Failure:</strong> {escape(_text(job.get("error_message")))}</section>' if job.get("error_message") else ""
     body = f"""<section class="page-heading"><p class="eyebrow">Analysis job #{job['id']}</p><h1>{escape(_text(job['server_identifier']))} <span class="muted">{escape(_text(job['server_version']))}</span></h1><p><span class="badge status-{escape(_text(job['status']))}">{escape(_text(job['status']))}</span> package <code>{escape(_text(job['package_identifier']))}</code></p></section>{error}<section class="panel"><dl class="facts"><div><dt>Requested</dt><dd>{escape(_text(job['requested_at']))}</dd></div><div><dt>Started</dt><dd>{escape(_text(job.get('started_at'), 'Not started'))}</dd></div><div><dt>Completed</dt><dd>{escape(_text(job.get('completed_at'), 'Not completed'))}</dd></div><div><dt>Artifact</dt><dd><code>{escape(_text(job.get('artifact_sha256'), 'Not available'))}</code></dd></div><div><dt>Result</dt><dd>{analysis_link}</dd></div><div><dt>Reused existing</dt><dd>{'yes' if job.get('reused_existing') else 'no'}</dd></div></dl></section><section class="panel"><h2>Bounded worker output</h2>{logs or '<p class="empty">No worker output recorded.</p>'}</section>"""
     return layout(f"Job #{job['id']}", body)
+
+
+def review_job_detail_page(job: dict[str, Any]) -> str:
+    error = (
+        f'<section class="notice danger"><strong>Failure:</strong> '
+        f"{escape(_text(job.get('error_message')))}</section>"
+        if job.get("error_message")
+        else ""
+    )
+    result = (
+        f"Recorded as review #{job['review_id']}."
+        if job.get("review_id")
+        else "No authoritative review has been recorded yet."
+    )
+    body = f"""<section class="page-heading"><p class="eyebrow">Review job #{job['id']}</p><h1>{escape(_text(job['title']))}</h1><p><span class="badge status-{escape(_text(job['status']))}">{escape(_text(job['status']))}</span> finding <a href="/analyses/{job['analysis_run_id']}#finding-{job['finding_id']}">#{job['finding_id']}</a></p></section>{error}
+<section class="panel"><dl class="facts"><div><dt>Source</dt><dd><code>{escape(_text(job['subject_path']))}</code></dd></div><div><dt>Transition</dt><dd>{escape(_text(job['expected_disposition']))} → {escape(_text(job['disposition']))}</dd></div><div><dt>Reviewer</dt><dd>{escape(_text(job['reviewer']))}</dd></div><div><dt>Requested</dt><dd>{escape(_text(job['requested_at']))}</dd></div><div><dt>Completed</dt><dd>{escape(_text(job.get('completed_at'), 'Not completed'))}</dd></div><div><dt>Result</dt><dd>{result}</dd></div></dl></section>"""
+    return layout(f"Review job #{job['id']}", body)
 
 
 def error_page(status: int, title: str, message: str) -> str:
@@ -219,6 +310,43 @@ def _analysis_row(row: dict[str, Any]) -> str:
     return f'<tr><td><a href="/analyses/{row["id"]}">#{row["id"]}</a> <span class="badge status-{escape(_text(row["status"]))}">{escape(_text(row["status"]))}</span></td><td>{escape(_text(row["server_identifier"]))}<div class="meta">{escape(_text(row["server_version"]))}</div></td><td>{escape(_text(row["package_identifier"]))}</td><td>{findings}</td><td>{escape(_text(row["started_at"]))}</td></tr>'
 
 
+def _finding_article(item: dict[str, Any]) -> str:
+    location = escape(_text(item["subject_path"]))
+    if item.get("line_number"):
+        location += ":" + escape(str(item["line_number"]))
+    if item.get("source_enabled"):
+        location = (
+            f'<a href="/findings/{item["id"]}/source"><code>{location}</code></a>'
+        )
+    else:
+        location = f"<code>{location}</code>"
+
+    reviews = "".join(
+        f"<li>{escape(_text(review['reviewed_at']))} · "
+        f"{escape(_text(review['previous_disposition']))} → "
+        f"<strong>{escape(_text(review['disposition']))}</strong> · "
+        f"{escape(_text(review['reviewer']))}</li>"
+        for review in item.get("reviews", [])
+    )
+    history = (
+        f'<details class="review-history"><summary>Review history '
+        f"({len(item['reviews'])})</summary><ul>{reviews}</ul></details>"
+        if reviews
+        else ""
+    )
+    review_form = ""
+    request = item.get("review_request")
+    if request:
+        options = "".join(
+            f'<option value="{escape(value, quote=True)}">'
+            f"{escape(value)}</option>"
+            for value in request["dispositions"]
+        )
+        review_form = f"""<form class="review-form" method="post" action="/review-requests"><input type="hidden" name="finding_id" value="{item['id']}"><input type="hidden" name="expected_disposition" value="{escape(_text(item['disposition']), quote=True)}"><input type="hidden" name="csrf_token" value="{escape(request['csrf_token'], quote=True)}"><label for="disposition-{item['id']}">Review disposition</label><select id="disposition-{item['id']}" name="disposition">{options}</select><button type="submit">Submit review</button></form>"""
+
+    return f"""<article id="finding-{item['id']}" class="finding severity-{escape(_text(item['severity']))}"><div class="finding-header"><span class="badge">{escape(_text(item['severity']))}</span><strong>{escape(_text(item['title']))}</strong></div><div class="meta">{escape(_text(item['rule_id']))} · {escape(_text(item['disposition']))} · confidence {escape(_text(item['confidence']))}</div><p>{location}</p><p>{escape(_text(item['explanation']))}</p>{history}{review_form}</article>"""
+
+
 def _unreviewed_finding_row(row: dict[str, Any]) -> str:
     location = escape(_text(row["subject_path"], "—"))
     if row.get("line_number") is not None:
@@ -240,6 +368,10 @@ def _unreviewed_finding_row(row: dict[str, Any]) -> str:
 
 def _job_row(job: dict[str, Any]) -> str:
     return f'<tr><td><a href="/jobs/{job["id"]}">#{job["id"]}</a></td><td>{escape(_text(job["server_identifier"]))}<div class="meta">{escape(_text(job["server_version"]))}</div></td><td>{escape(_text(job["package_identifier"]))}</td><td><span class="badge status-{escape(_text(job["status"]))}">{escape(_text(job["status"]))}</span></td><td>{escape(_text(job["requested_at"]))}</td></tr>'
+
+
+def _review_job_row(job: dict[str, Any]) -> str:
+    return f'<tr><td><a href="/review-jobs/{job["id"]}">#{job["id"]}</a></td><td><a href="/analyses/{job["analysis_run_id"]}#finding-{job["finding_id"]}">#{job["finding_id"]}</a><div class="meta">{escape(_text(job["title"]))}</div></td><td>{escape(_text(job["expected_disposition"]))} → {escape(_text(job["disposition"]))}</td><td><span class="badge status-{escape(_text(job["status"]))}">{escape(_text(job["status"]))}</span></td><td>{escape(_text(job["requested_at"]))}</td></tr>'
 
 
 def _card(label: str, value: Any, detail: str, detail_href: str | None = None) -> str:

@@ -13,8 +13,12 @@ import sys
 import time
 from typing import Any
 
-from .analysis_catalog import AnalysisSelectionError, resolve_candidate
-from .config import AnalysisConfig, Config, ConfigurationError
+from .analysis_catalog import (
+    AnalysisSelectionError,
+    resolve_candidate,
+    resolve_review_candidate,
+)
+from .config import AnalysisConfig, Config, ConfigurationError, ReviewConfig
 from .jobs import JobStore, JobStoreError
 
 
@@ -25,7 +29,7 @@ class WorkerError(RuntimeError):
 def process_next(config: Config, store: JobStore) -> bool:
     analysis = config.analysis
     if analysis is None:
-        raise WorkerError("on-demand analysis is not enabled")
+        return False
     job = store.claim_next()
     if job is None:
         return False
@@ -88,6 +92,82 @@ def process_next(config: Config, store: JobStore) -> bool:
     return True
 
 
+def process_next_review(config: Config, store: JobStore) -> bool:
+    review = config.review
+    if review is None:
+        return False
+    job = store.claim_next_review()
+    if job is None:
+        return False
+
+    try:
+        candidate = resolve_review_candidate(
+            config.database_path,
+            int(job["finding_id"]),
+            str(job["expected_disposition"]),
+        )
+        for field in ("analysis_run_id", "title", "subject_path"):
+            if getattr(candidate, field) != job[field]:
+                raise WorkerError(
+                    f"catalog review selection changed before execution: {field}"
+                )
+        result = run_bounded(
+            build_review_argv(config.database_path, review, job),
+            timeout_seconds=review.timeout_seconds,
+            maximum_output_bytes=review.maximum_output_bytes,
+        )
+        stdout_text = result["stdout"].decode("utf-8", errors="replace")
+        stderr_text = result["stderr"].decode("utf-8", errors="replace")
+        if result["timed_out"]:
+            store.fail_review(
+                int(job["id"]),
+                error_message=f"review exceeded {review.timeout_seconds} seconds",
+                return_code=result["return_code"],
+                stdout_excerpt=stdout_text,
+                stderr_excerpt=stderr_text,
+                output_truncated=result["truncated"],
+            )
+            return True
+        if result["return_code"] != 0:
+            store.fail_review(
+                int(job["id"]),
+                error_message="mcp-observatory review exited non-zero",
+                return_code=result["return_code"],
+                stdout_excerpt=stdout_text,
+                stderr_excerpt=stderr_text,
+                output_truncated=result["truncated"],
+            )
+            return True
+        if result["truncated"]:
+            store.fail_review(
+                int(job["id"]),
+                error_message="mcp-observatory review output exceeded the portal limit",
+                return_code=result["return_code"],
+                stdout_excerpt=stdout_text,
+                stderr_excerpt=stderr_text,
+                output_truncated=True,
+            )
+            return True
+        payload = _parse_review_result(stdout_text, job)
+        store.complete_review(
+            int(job["id"]),
+            review_id=int(payload["review_id"]),
+            return_code=int(result["return_code"]),
+            stdout_excerpt=stdout_text,
+            stderr_excerpt=stderr_text,
+            output_truncated=result["truncated"],
+        )
+    except (
+        AnalysisSelectionError,
+        WorkerError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        store.fail_review(int(job["id"]), error_message=str(exc))
+    return True
+
+
 def build_argv(database_path: Path, analysis: AnalysisConfig, candidate: Any) -> list[str]:
     return [
         str(analysis.observatory_binary),
@@ -105,6 +185,28 @@ def build_argv(database_path: Path, analysis: AnalysisConfig, candidate: Any) ->
         str(analysis.rules_path),
         "--evidence-root",
         str(analysis.evidence_root),
+        "--format",
+        "json",
+    ]
+
+
+def build_review_argv(
+    database_path: Path, review: ReviewConfig, job: dict[str, Any]
+) -> list[str]:
+    return [
+        str(review.observatory_binary),
+        "review",
+        "finding",
+        "--database",
+        str(database_path),
+        "--finding-id",
+        str(int(job["finding_id"])),
+        "--expected-disposition",
+        str(job["expected_disposition"]),
+        "--disposition",
+        str(job["disposition"]),
+        "--reviewer",
+        review.reviewer,
         "--format",
         "json",
     ]
@@ -218,6 +320,28 @@ def _parse_result(stdout_text: str) -> dict[str, Any]:
     return payload
 
 
+def _parse_review_result(
+    stdout_text: str, job: dict[str, Any]
+) -> dict[str, Any]:
+    payload = json.loads(stdout_text)
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        raise WorkerError(
+            "mcp-observatory review JSON did not report completed status"
+        )
+    if payload.get("finding_id") != int(job["finding_id"]):
+        raise WorkerError(
+            "mcp-observatory review JSON returned a different finding identifier"
+        )
+    if payload.get("disposition") != job["disposition"]:
+        raise WorkerError(
+            "mcp-observatory review JSON returned a different disposition"
+        )
+    review_id = payload.get("review_id")
+    if not isinstance(review_id, int) or review_id <= 0:
+        raise WorkerError("mcp-observatory review JSON has no valid review_id")
+    return payload
+
+
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -228,9 +352,25 @@ def main(argv: list[str] | None = None) -> int:
     options = parser.parse_args(argv)
     try:
         config = Config.from_env()
-        if config.analysis is None:
-            raise ConfigurationError("MCP_PORTAL_ENABLE_ANALYSIS must be enabled for the worker")
-        store = JobStore(config.analysis.jobs_database_path)
+        if config.analysis is None and config.review is None:
+            raise ConfigurationError(
+                "analysis or review must be enabled for the worker"
+            )
+        jobs_path = (
+            config.analysis.jobs_database_path
+            if config.analysis is not None
+            else config.review.jobs_database_path  # type: ignore[union-attr]
+        )
+        if (
+            config.analysis is not None
+            and config.review is not None
+            and config.analysis.jobs_database_path
+            != config.review.jobs_database_path
+        ):
+            raise ConfigurationError(
+                "analysis and review must use the same portal job database"
+            )
+        store = JobStore(jobs_path)
     except (ConfigurationError, JobStoreError) as exc:
         print(f"worker startup failed: {exc}", file=sys.stderr)
         return 2
@@ -238,13 +378,20 @@ def main(argv: list[str] | None = None) -> int:
     while True:
         try:
             processed = process_next(config, store)
+            if not processed:
+                processed = process_next_review(config, store)
         except (WorkerError, JobStoreError) as exc:
             print(f"worker failed: {exc}", file=sys.stderr)
             return 3
         if options.once:
             return 0
         if not processed:
-            time.sleep(config.analysis.poll_seconds)
+            poll_seconds = (
+                config.analysis.poll_seconds
+                if config.analysis is not None
+                else config.review.poll_seconds  # type: ignore[union-attr]
+            )
+            time.sleep(poll_seconds)
 
 
 if __name__ == "__main__":
