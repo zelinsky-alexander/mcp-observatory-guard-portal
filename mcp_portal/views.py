@@ -16,7 +16,7 @@ def layout(title: str, body: str) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{safe_title} · {PORTAL_NAME}</title><link rel="stylesheet" href="/static/portal.css"></head>
 <body><header class="site-header"><div><a class="brand" href="/">MCP Observatory</a><span class="tagline">Evidence, provenance, and change over time</span></div>
-<nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/servers">Servers</a><a href="/jobs">Analysis queue</a></nav></header>
+<nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/servers">Servers</a><a href="/reports/ecosystems">Ecosystems</a><a href="/jobs">Analysis queue</a></nav></header>
 <main>{body}</main><footer>Results describe exact artifacts under documented analysis profiles. They do not prove safety or author intent.</footer></body></html>"""
 
 
@@ -54,12 +54,38 @@ def dashboard_page(data: dict[str, Any]) -> str:
 
 def servers_page(result: dict[str, Any]) -> str:
     query = result["query"]
+    ecosystem = result["ecosystem"]
     rows = "".join(_browser_server_row(row) for row in result["rows"]) or '<tr><td colspan="6" class="empty">No matching servers.</td></tr>'
     total_pages = max(1, ceil(result["total"] / result["page_size"]))
-    pagination = _pagination("/servers", query, result["page"], total_pages)
+    pagination = _pagination(
+        "/servers", query, result["page"], total_pages, ecosystem=ecosystem
+    )
+    ecosystem_input = (
+        f'<input type="hidden" name="ecosystem" value="{escape(ecosystem, quote=True)}">'
+        if ecosystem
+        else ""
+    )
+    filter_summary = ""
+    if ecosystem:
+        filter_summary = (
+            f' · ecosystem <code>{escape(ecosystem)}</code> '
+            '<a href="/servers">Clear ecosystem filter</a>'
+        )
     return layout("Servers", f"""<section class="page-heading"><p class="eyebrow">Official registry catalog</p><h1>Server browser</h1><p>One row per server identifier, showing its most recently imported metadata variant.</p></section>
-<form class="search" method="get" action="/servers"><label for="q">Search identifiers, descriptions, packages, repositories, and remote URLs</label><div><input id="q" name="q" value="{escape(query)}" maxlength="200" autocomplete="off"><button type="submit">Search</button></div></form>
-<div class="result-summary">{result['total']:,} server identifiers · page {result['page']} of {total_pages}</div><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Server</th><th>Latest version</th><th>Versions</th><th>Package</th><th>Repository</th><th>Updated</th></tr></thead><tbody>{rows}</tbody></table></div></section>{pagination}""")
+<form class="search" method="get" action="/servers">{ecosystem_input}<label for="q">Search identifiers, descriptions, packages, repositories, and remote URLs</label><div><input id="q" name="q" value="{escape(query)}" maxlength="200" autocomplete="off"><button type="submit">Search</button></div></form>
+<div class="result-summary">{result['total']:,} server identifiers · page {result['page']} of {total_pages}{filter_summary}</div><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Server</th><th>Latest version</th><th>Versions</th><th>Package</th><th>Repository</th><th>Updated</th></tr></thead><tbody>{rows}</tbody></table></div></section>{pagination}""")
+
+
+def ecosystem_report_page(rows: list[dict[str, Any]]) -> str:
+    table_rows = "".join(_ecosystem_row(row) for row in rows) or (
+        '<tr><td colspan="4" class="empty">No package declarations are available.</td></tr>'
+    )
+    return layout(
+        "Package ecosystems",
+        f"""<section class="page-heading"><p class="eyebrow">Catalog report</p><h1>Package ecosystems</h1><p>Package declarations grouped by their Registry ecosystem.</p></section>
+<section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Ecosystem</th><th>Package records</th><th>Unique package identifiers</th><th>Server versions</th></tr></thead><tbody>{table_rows}</tbody></table></div></section>
+<section class="notice"><strong>Counting boundary:</strong> package records include repeated declarations across immutable server-version records. A server version that declares packages from multiple ecosystems is counted once in each relevant ecosystem.</section>""",
+    )
 
 
 def server_detail_page(data: dict[str, Any]) -> str:
@@ -140,6 +166,17 @@ def _browser_server_row(row: dict[str, Any]) -> str:
     return f'<tr><td><a href="{href}">{escape(_text(row["server_identifier"]))}</a><div class="truncate">{escape(_text(row["description"]))}</div></td><td><code>{escape(_text(row["server_version"]))}</code></td><td>{int(row["version_count"]):,}</td><td>{escape(_text(row["package_identifier"], "—"))}<div class="meta">{escape(_text(row["package_transport"]))}</div></td><td>{escape(_text(row["repository_host"], "—"))}</td><td>{escape(_text(row["updated_at"] or row["published_at"], "—"))}</td></tr>'
 
 
+def _ecosystem_row(row: dict[str, Any]) -> str:
+    ecosystem = _text(row["ecosystem"])
+    href = "/servers?" + urlencode({"ecosystem": ecosystem})
+    return (
+        f'<tr><td><a href="{escape(href, quote=True)}"><code>{escape(ecosystem)}</code></a></td>'
+        f"<td>{int(row['package_records']):,}</td>"
+        f"<td>{int(row['unique_packages']):,}</td>"
+        f"<td>{int(row['server_versions']):,}</td></tr>"
+    )
+
+
 def _analysis_row(row: dict[str, Any]) -> str:
     findings = f"{int(row.get('critical_count') or 0)} critical · {int(row.get('high_count') or 0)} high · {int(row.get('medium_count') or 0)} medium"
     return f'<tr><td><a href="/analyses/{row["id"]}">#{row["id"]}</a> <span class="badge status-{escape(_text(row["status"]))}">{escape(_text(row["status"]))}</span></td><td>{escape(_text(row["server_identifier"]))}<div class="meta">{escape(_text(row["server_version"]))}</div></td><td>{escape(_text(row["package_identifier"]))}</td><td>{findings}</td><td>{escape(_text(row["started_at"]))}</td></tr>'
@@ -153,23 +190,37 @@ def _card(label: str, value: Any, detail: str) -> str:
     return f'<article class="card"><span>{escape(str(label))}</span><strong>{escape(str(value))}</strong><small>{escape(detail)}</small></article>'
 
 
-def _pagination(base: str, query: str, page: int, total_pages: int) -> str:
+def _pagination(
+    base: str,
+    query: str,
+    page: int,
+    total_pages: int,
+    *,
+    ecosystem: str = "",
+) -> str:
     if total_pages <= 1:
         return ""
     links = []
     if page > 1:
-        links.append(_page_link(base, query, page - 1, "← Previous"))
+        links.append(
+            _page_link(base, query, page - 1, "← Previous", ecosystem=ecosystem)
+        )
     links.append(f"<span>Page {page} of {total_pages}</span>")
     if page < total_pages:
-        links.append(_page_link(base, query, page + 1, "Next →"))
+        links.append(_page_link(base, query, page + 1, "Next →", ecosystem=ecosystem))
     return '<nav class="pagination" aria-label="Server pages">' + "".join(links) + "</nav>"
 
 
-def _page_link(base: str, query: str, page: int, label: str) -> str:
+def _page_link(
+    base: str, query: str, page: int, label: str, *, ecosystem: str = ""
+) -> str:
     params: dict[str, Any] = {"page": page}
     if query:
         params["q"] = query
-    return f'<a href="{base}?{urlencode(params)}">{escape(label)}</a>'
+    if ecosystem:
+        params["ecosystem"] = ecosystem
+    href = base + "?" + urlencode(params)
+    return f'<a href="{escape(href, quote=True)}">{escape(label)}</a>'
 
 
 def _short_hash(value: Any) -> str:

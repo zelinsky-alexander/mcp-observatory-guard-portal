@@ -70,6 +70,27 @@ class HttpTests(unittest.TestCase):
             body = response.read().decode("utf-8")
             self.assertIn("io.example/filesystem", body)
 
+    def test_ecosystem_report(self) -> None:
+        self._start(False)
+        with urlopen(self.base_url + "/reports/ecosystems", timeout=2) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("Package ecosystems", body)
+            self.assertIn(
+                '<a href="/servers?ecosystem=npm"><code>npm</code></a>', body
+            )
+            self.assertIn("<td>3</td>", body)
+            self.assertIn("Counting boundary", body)
+
+        with urlopen(self.base_url + "/servers?ecosystem=pypi", timeout=2) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("io.example/filesystem", body)
+            self.assertNotIn("io.example/search", body)
+            self.assertIn("example-filesystem", body)
+            self.assertIn('name="ecosystem" value="pypi"', body)
+            self.assertIn("Clear ecosystem filter", body)
+
     def test_disabled_post_is_rejected(self) -> None:
         self._start(False)
         request = Request(self.base_url + "/", method="POST", data=b"")

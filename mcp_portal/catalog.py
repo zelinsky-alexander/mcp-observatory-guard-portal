@@ -196,12 +196,31 @@ class Catalog:
                 "analysis": analysis,
             }
 
+    def ecosystem_summary(self) -> list[dict[str, Any]]:
+        """Summarize package declarations by Registry ecosystem."""
+        self.schema_status()
+        with self._connect() as connection:
+            return _rows_to_dicts(
+                connection.execute(
+                    """
+                    SELECT registry_type AS ecosystem,
+                           COUNT(*) AS package_records,
+                           COUNT(DISTINCT identifier) AS unique_packages,
+                           COUNT(DISTINCT server_version_id) AS server_versions
+                    FROM packages
+                    GROUP BY registry_type
+                    ORDER BY package_records DESC, registry_type COLLATE BINARY
+                    """
+                ).fetchall()
+            )
+
     def search_servers(
         self,
         query: str,
         *,
         page: int,
         page_size: int,
+        ecosystem: str = "",
     ) -> dict[str, Any]:
         if page < 1:
             page = 1
@@ -209,29 +228,40 @@ class Catalog:
             raise ValueError("page_size must be between 1 and 100")
 
         normalized = query.strip()[:200]
+        normalized_ecosystem = ecosystem.strip()[:200]
         pattern = "%" + _escape_like(normalized) + "%"
         where_sql = """
-            (?1 = '' OR
-             sv.server_identifier LIKE ?2 ESCAPE '\\' OR
-             COALESCE(sv.description, '') LIKE ?2 ESCAPE '\\' OR
+            (:query = '' OR
+             sv.server_identifier LIKE :pattern ESCAPE '\\' OR
+             COALESCE(sv.description, '') LIKE :pattern ESCAPE '\\' OR
              EXISTS(SELECT 1 FROM packages sp
                     WHERE sp.server_version_id=sv.id
-                      AND sp.identifier LIKE ?2 ESCAPE '\\') OR
+                      AND sp.identifier LIKE :pattern ESCAPE '\\') OR
              EXISTS(SELECT 1 FROM repositories sr
                     WHERE sr.server_version_id=sv.id
-                      AND COALESCE(sr.url, '') LIKE ?2 ESCAPE '\\') OR
+                      AND COALESCE(sr.url, '') LIKE :pattern ESCAPE '\\') OR
              EXISTS(SELECT 1 FROM remotes sm
                     WHERE sm.server_version_id=sv.id
-                      AND sm.url LIKE ?2 ESCAPE '\\'))
+                      AND sm.url LIKE :pattern ESCAPE '\\'))
+            AND (:ecosystem = '' OR EXISTS(
+                SELECT 1 FROM packages ep
+                WHERE ep.server_version_id=sv.id
+                  AND ep.registry_type = :ecosystem COLLATE BINARY
+            ))
         """
         offset = (page - 1) * page_size
+        parameters = {
+            "query": normalized,
+            "pattern": pattern,
+            "ecosystem": normalized_ecosystem,
+        }
 
         with self._connect() as connection:
             total = int(
                 connection.execute(
                     f"SELECT COUNT(DISTINCT sv.server_identifier) "
                     f"FROM server_versions sv WHERE {where_sql}",
-                    (normalized, pattern),
+                    parameters,
                 ).fetchone()[0]
             )
             rows = _rows_to_dicts(
@@ -255,9 +285,13 @@ class Catalog:
                             WHERE allv.server_identifier=m.server_identifier) AS version_count,
                            (SELECT p.identifier FROM packages p
                             WHERE p.server_version_id=m.id
+                              AND (:ecosystem = '' OR
+                                   p.registry_type = :ecosystem COLLATE BINARY)
                             ORDER BY p.position LIMIT 1) AS package_identifier,
                            (SELECT p.transport FROM packages p
                             WHERE p.server_version_id=m.id
+                              AND (:ecosystem = '' OR
+                                   p.registry_type = :ecosystem COLLATE BINARY)
                             ORDER BY p.position LIMIT 1) AS package_transport,
                            (SELECT r.host FROM repositories r
                             WHERE r.server_version_id=m.id) AS repository_host
@@ -265,13 +299,14 @@ class Catalog:
                     WHERE m.row_number=1
                     ORDER BY COALESCE(m.updated_at, m.published_at, '') COLLATE BINARY DESC,
                              m.server_identifier COLLATE BINARY
-                    LIMIT ?3 OFFSET ?4
+                    LIMIT :page_size OFFSET :offset
                     """,
-                    (normalized, pattern, page_size, offset),
+                    parameters | {"page_size": page_size, "offset": offset},
                 ).fetchall()
             )
         return {
             "query": normalized,
+            "ecosystem": normalized_ecosystem,
             "page": page,
             "page_size": page_size,
             "total": total,

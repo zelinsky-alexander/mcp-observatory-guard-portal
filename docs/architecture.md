@@ -62,8 +62,9 @@ A public or concurrent deployment should browse a consistently published SQLite 
 ## Routes
 
 - `/` dashboard.
-- `/servers` searchable, paginated server identifiers.
+- `/servers` searchable, paginated server identifiers with an optional exact ecosystem filter.
 - `/servers/{identifier}` immutable versions, packages, and eligible analysis forms.
+- `/reports/ecosystems` package declarations grouped by Registry ecosystem.
 - `POST /analysis-requests` constrained queue submission when enabled.
 - `/jobs` portal queue.
 - `/jobs/{id}` job status and bounded output.

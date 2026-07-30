@@ -30,6 +30,35 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(result["total"], 1)
         self.assertEqual(result["rows"][0]["server_identifier"], "io.example/search")
 
+    def test_server_search_filters_by_ecosystem(self) -> None:
+        result = self.catalog.search_servers(
+            "", page=1, page_size=20, ecosystem="pypi"
+        )
+        self.assertEqual(result["ecosystem"], "pypi")
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["rows"][0]["server_identifier"], "io.example/filesystem")
+        self.assertEqual(result["rows"][0]["package_identifier"], "example-filesystem")
+
+    def test_ecosystem_summary_counts_records_identifiers_and_versions(self) -> None:
+        result = self.catalog.ecosystem_summary()
+        self.assertEqual(
+            result,
+            [
+                {
+                    "ecosystem": "npm",
+                    "package_records": 3,
+                    "unique_packages": 2,
+                    "server_versions": 2,
+                },
+                {
+                    "ecosystem": "pypi",
+                    "package_records": 1,
+                    "unique_packages": 1,
+                    "server_versions": 1,
+                },
+            ],
+        )
+
     def test_server_detail_includes_packages_and_analysis(self) -> None:
         detail = self.catalog.server_detail("io.example/filesystem")
         self.assertIsNotNone(detail)

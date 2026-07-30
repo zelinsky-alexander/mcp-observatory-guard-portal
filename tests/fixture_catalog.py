@@ -62,6 +62,13 @@ def create_fixture(path: Path) -> None:
             "INSERT INTO packages VALUES(?, ?, 0, 'npm', ?, ?, 'stdio')",
             [(10, 1, '@example/filesystem', '1.0.0'), (20, 2, '@example/search', '2.1.0')],
         )
+        connection.executemany(
+            "INSERT INTO packages VALUES(?, ?, 1, ?, ?, ?, 'stdio')",
+            [
+                (11, 1, "pypi", "example-filesystem", "1.0.0"),
+                (21, 2, "npm", "@example/filesystem", "1.0.0"),
+            ],
+        )
         connection.execute("INSERT INTO package_arguments VALUES(10, 0, '/sandbox')")
         connection.execute("INSERT INTO package_environment VALUES(10, 0, 'TEST_TOKEN', 0, 'Synthetic test credential')")
         connection.execute("INSERT INTO remotes VALUES(1, 2, 0, 'https://mcp.example.test', 'https', 'mcp.example.test', 443, 'streamable-http')")

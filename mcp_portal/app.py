@@ -18,6 +18,7 @@ from .jobs import JobStore, JobStoreError
 from .views import (
     analysis_detail_page,
     dashboard_page,
+    ecosystem_report_page,
     error_page,
     job_detail_page,
     jobs_page,
@@ -105,12 +106,24 @@ class PortalHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK, dashboard_page(data), include_body=include_body
                 )
                 return
+            if target.path == "/reports/ecosystems":
+                rows = self.server.catalog.ecosystem_summary()
+                self._send_html(
+                    HTTPStatus.OK,
+                    ecosystem_report_page(rows),
+                    include_body=include_body,
+                )
+                return
             if target.path == "/servers":
                 parameters = parse_qs(target.query, keep_blank_values=True)
                 query = parameters.get("q", [""])[0]
+                ecosystem = parameters.get("ecosystem", [""])[0]
                 page = _positive_integer(parameters.get("page", ["1"])[0], fallback=1)
                 result = self.server.catalog.search_servers(
-                    query, page=page, page_size=self.server.page_size
+                    query,
+                    page=page,
+                    page_size=self.server.page_size,
+                    ecosystem=ecosystem,
                 )
                 self._send_html(
                     HTTPStatus.OK, servers_page(result), include_body=include_body

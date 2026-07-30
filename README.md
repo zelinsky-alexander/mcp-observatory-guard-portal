@@ -8,6 +8,7 @@ The portal browses the SQLite catalog and static-analysis records produced by [`
 
 - Dashboard with the latest imported snapshot, catalog totals, latest refresh records, recent static-analysis runs, and optional portal jobs.
 - Searchable server browser with one current row per Registry server identifier.
+- Package ecosystem report with package-record, unique-identifier, and server-version counts, linking to the filtered server browser.
 - Server detail with immutable metadata variants, packages, declared environment names, remotes, snapshot history, analysis history, and eligible analysis actions.
 - Static-analysis detail with findings and finalized evidence metadata.
 - Portal-owned analysis queue and job detail pages.
