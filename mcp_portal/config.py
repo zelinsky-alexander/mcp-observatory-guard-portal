@@ -17,7 +17,7 @@ class AnalysisConfig:
     observatory_binary: Path
     rules_path: Path
     evidence_root: Path
-    writer_lock_path: Path
+    writer_lock_path: Path = Path("/tmp/mcp-observatory-writer.lock")
     timeout_seconds: int = 900
     maximum_output_bytes: int = 65536
     poll_seconds: int = 2
