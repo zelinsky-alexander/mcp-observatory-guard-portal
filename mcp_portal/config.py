@@ -17,9 +17,16 @@ class AnalysisConfig:
     observatory_binary: Path
     rules_path: Path
     evidence_root: Path
+    writer_lock_path: Path = Path("/tmp/mcp-observatory-writer.lock")
     timeout_seconds: int = 900
     maximum_output_bytes: int = 65536
     poll_seconds: int = 2
+    maximum_queued_jobs: int = 100
+    requests_per_client_window: int = 2
+    request_window_seconds: int = 3600
+    running_lease_seconds: int = 1200
+    maximum_attempts: int = 2
+    trusted_proxy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,10 +85,18 @@ class Config:
                 "analysis, evidence viewing, and review are restricted to a loopback portal"
             )
         if _enabled("MCP_PORTAL_ENABLE_ANALYSIS"):
+            if host not in {"127.0.0.1", "localhost", "::1"}:
+                raise ConfigurationError(
+                    "analysis-enabled portal must bind to loopback and be published through a reverse proxy or tunnel"
+                )
             jobs_database_path = _writable_database_path("MCP_PORTAL_JOBS_DATABASE")
             observatory_binary = _existing_file("MCP_PORTAL_OBSERVATORY_BINARY", required=True)
             rules_path = _existing_file("MCP_PORTAL_ANALYSIS_RULES", required=True)
             evidence_root = _directory_path("MCP_PORTAL_EVIDENCE_ROOT")
+            writer_lock_path = _writable_path(
+                "MCP_PORTAL_OBSERVATORY_WRITER_LOCK",
+                default=jobs_database_path.parent / "observatory-writer.lock",
+            )
             assert observatory_binary is not None and rules_path is not None
             if not os.access(observatory_binary, os.X_OK):
                 raise ConfigurationError(
@@ -92,6 +107,7 @@ class Config:
                 observatory_binary=observatory_binary,
                 rules_path=rules_path,
                 evidence_root=evidence_root,
+                writer_lock_path=writer_lock_path,
                 timeout_seconds=_bounded_integer(
                     "MCP_PORTAL_ANALYSIS_TIMEOUT_SECONDS", 900, minimum=30, maximum=7200
                 ),
@@ -101,6 +117,22 @@ class Config:
                 poll_seconds=_bounded_integer(
                     "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
                 ),
+                maximum_queued_jobs=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_QUEUED_JOBS", 100, minimum=1, maximum=10000
+                ),
+                requests_per_client_window=_bounded_integer(
+                    "MCP_PORTAL_REQUESTS_PER_CLIENT_WINDOW", 2, minimum=1, maximum=1000
+                ),
+                request_window_seconds=_bounded_integer(
+                    "MCP_PORTAL_REQUEST_WINDOW_SECONDS", 3600, minimum=60, maximum=86400
+                ),
+                running_lease_seconds=_bounded_integer(
+                    "MCP_PORTAL_RUNNING_LEASE_SECONDS", 1200, minimum=60, maximum=14400
+                ),
+                maximum_attempts=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_ATTEMPTS", 2, minimum=1, maximum=10
+                ),
+                trusted_proxy=_enabled("MCP_PORTAL_TRUST_PROXY_HEADERS"),
             )
         if _enabled("MCP_PORTAL_ENABLE_EVIDENCE_VIEW"):
             observatory_binary = _existing_file(
@@ -206,6 +238,16 @@ def _writable_database_path(name: str) -> Path:
         raise ConfigurationError(f"{name} is not a regular file: {path}")
     if not path.parent.is_dir():
         raise ConfigurationError(f"parent directory does not exist for {name}: {path.parent}")
+    return path
+
+
+def _writable_path(name: str, *, default: Path) -> Path:
+    raw = os.environ.get(name, "").strip()
+    path = Path(raw).expanduser().resolve() if raw else default.resolve()
+    if not path.parent.is_dir():
+        raise ConfigurationError(f"parent directory does not exist for {name}: {path.parent}")
+    if path.exists() and not path.is_file():
+        raise ConfigurationError(f"{name} is not a regular file: {path}")
     return path
 
 
