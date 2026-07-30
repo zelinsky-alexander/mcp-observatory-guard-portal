@@ -23,12 +23,33 @@ class AnalysisConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceConfig:
+    observatory_binary: Path
+    evidence_root: Path
+    timeout_seconds: int = 10
+    maximum_output_bytes: int = 1024 * 1024
+    maximum_download_bytes: int = 8 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewConfig:
+    jobs_database_path: Path
+    observatory_binary: Path
+    reviewer: str
+    timeout_seconds: int = 30
+    maximum_output_bytes: int = 65536
+    poll_seconds: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     database_path: Path
     host: str = "127.0.0.1"
     port: int = 8080
     page_size: int = 50
     analysis: AnalysisConfig | None = None
+    evidence: EvidenceConfig | None = None
+    review: ReviewConfig | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -42,11 +63,21 @@ class Config:
         port = _bounded_integer("MCP_PORTAL_PORT", 8080, minimum=1, maximum=65535)
         page_size = _bounded_integer("MCP_PORTAL_PAGE_SIZE", 50, minimum=1, maximum=100)
         analysis = None
+        evidence = None
+        review = None
+        local_features_enabled = any(
+            _enabled(name)
+            for name in (
+                "MCP_PORTAL_ENABLE_ANALYSIS",
+                "MCP_PORTAL_ENABLE_EVIDENCE_VIEW",
+                "MCP_PORTAL_ENABLE_REVIEW",
+            )
+        )
+        if local_features_enabled and host not in {"127.0.0.1", "localhost", "::1"}:
+            raise ConfigurationError(
+                "analysis, evidence viewing, and review are restricted to a loopback portal"
+            )
         if _enabled("MCP_PORTAL_ENABLE_ANALYSIS"):
-            if host not in {"127.0.0.1", "localhost", "::1"}:
-                raise ConfigurationError(
-                    "on-demand analysis is restricted to a loopback portal in this milestone"
-                )
             jobs_database_path = _writable_database_path("MCP_PORTAL_JOBS_DATABASE")
             observatory_binary = _existing_file("MCP_PORTAL_OBSERVATORY_BINARY", required=True)
             rules_path = _existing_file("MCP_PORTAL_ANALYSIS_RULES", required=True)
@@ -71,6 +102,68 @@ class Config:
                     "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
                 ),
             )
+        if _enabled("MCP_PORTAL_ENABLE_EVIDENCE_VIEW"):
+            observatory_binary = _existing_file(
+                "MCP_PORTAL_OBSERVATORY_BINARY", required=True
+            )
+            evidence_root = _directory_path("MCP_PORTAL_EVIDENCE_ROOT")
+            assert observatory_binary is not None
+            if not os.access(observatory_binary, os.X_OK):
+                raise ConfigurationError(
+                    f"MCP_PORTAL_OBSERVATORY_BINARY is not executable: {observatory_binary}"
+                )
+            evidence = EvidenceConfig(
+                observatory_binary=observatory_binary,
+                evidence_root=evidence_root,
+                timeout_seconds=_bounded_integer(
+                    "MCP_PORTAL_EVIDENCE_TIMEOUT_SECONDS",
+                    10,
+                    minimum=1,
+                    maximum=60,
+                ),
+                maximum_download_bytes=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_DOWNLOAD_BYTES",
+                    8 * 1024 * 1024,
+                    minimum=128 * 1024,
+                    maximum=8 * 1024 * 1024,
+                ),
+            )
+        if _enabled("MCP_PORTAL_ENABLE_REVIEW"):
+            observatory_binary = _existing_file(
+                "MCP_PORTAL_OBSERVATORY_BINARY", required=True
+            )
+            assert observatory_binary is not None
+            if not os.access(observatory_binary, os.X_OK):
+                raise ConfigurationError(
+                    f"MCP_PORTAL_OBSERVATORY_BINARY is not executable: {observatory_binary}"
+                )
+            reviewer = os.environ.get("MCP_PORTAL_REVIEWER", "").strip()
+            if not reviewer or len(reviewer.encode("utf-8")) > 200:
+                raise ConfigurationError(
+                    "MCP_PORTAL_REVIEWER must contain 1 to 200 UTF-8 bytes"
+                )
+            review = ReviewConfig(
+                jobs_database_path=_writable_database_path(
+                    "MCP_PORTAL_JOBS_DATABASE"
+                ),
+                observatory_binary=observatory_binary,
+                reviewer=reviewer,
+                timeout_seconds=_bounded_integer(
+                    "MCP_PORTAL_REVIEW_TIMEOUT_SECONDS",
+                    30,
+                    minimum=1,
+                    maximum=120,
+                ),
+                maximum_output_bytes=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_OUTPUT_BYTES",
+                    65536,
+                    minimum=4096,
+                    maximum=1048576,
+                ),
+                poll_seconds=_bounded_integer(
+                    "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
+                ),
+            )
 
         return cls(
             database_path=database_path,
@@ -78,6 +171,8 @@ class Config:
             port=port,
             page_size=page_size,
             analysis=analysis,
+            evidence=evidence,
+            review=review,
         )
 
 

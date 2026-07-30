@@ -11,9 +11,14 @@ import secrets
 import sys
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from .analysis_catalog import AnalysisSelectionError, resolve_candidate
+from .analysis_catalog import (
+    AnalysisSelectionError,
+    resolve_candidate,
+    resolve_review_candidate,
+)
 from .catalog import Catalog, CatalogError
 from .config import Config, ConfigurationError
+from .evidence import EvidenceError, download_finding_source, read_finding_source
 from .jobs import JobStore, JobStoreError
 from .views import (
     analysis_detail_page,
@@ -22,6 +27,8 @@ from .views import (
     error_page,
     job_detail_page,
     jobs_page,
+    finding_source_page,
+    review_job_detail_page,
     server_detail_page,
     servers_page,
     unreviewed_findings_page,
@@ -36,12 +43,32 @@ class PortalServer(ThreadingHTTPServer):
         self.config = config
         self.catalog = catalog
         self.page_size = config.page_size
-        self.jobs = JobStore(config.analysis.jobs_database_path) if config.analysis else None
+        jobs_path = None
+        if config.analysis is not None:
+            jobs_path = config.analysis.jobs_database_path
+        if config.review is not None:
+            if (
+                jobs_path is not None
+                and jobs_path != config.review.jobs_database_path
+            ):
+                raise ConfigurationError(
+                    "analysis and review must use the same portal job database"
+                )
+            jobs_path = config.review.jobs_database_path
+        self.jobs = JobStore(jobs_path) if jobs_path is not None else None
         self.csrf_secret = secrets.token_bytes(32)
         super().__init__(address, PortalHandler)
 
     def csrf_token(self, server_version_id: int, package_id: int) -> str:
         message = f"analysis:{server_version_id}:{package_id}".encode("ascii")
+        return hmac.new(self.csrf_secret, message, hashlib.sha256).hexdigest()
+
+    def review_csrf_token(
+        self, finding_id: int, expected_disposition: str
+    ) -> str:
+        message = (
+            f"review:{finding_id}:{expected_disposition}".encode("ascii")
+        )
         return hmac.new(self.csrf_secret, message, hashlib.sha256).hexdigest()
 
 
@@ -50,6 +77,16 @@ class PortalHandler(BaseHTTPRequestHandler):
     server_version = "McpAssurancePortal/0.2"
     sys_version = ""
     maximum_form_bytes = 4096
+    review_dispositions = frozenset(
+        {
+            "expected",
+            "reviewed-benign",
+            "mitigated",
+            "suspicious",
+            "confirmed-risk",
+            "false-positive",
+        }
+    )
 
     def do_GET(self) -> None:  # noqa: N802
         self._dispatch(include_body=True)
@@ -59,14 +96,28 @@ class PortalHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         target = urlsplit(self.path)
-        if target.path != "/analysis-requests" or self.server.jobs is None:
-            self._send_html(
-                HTTPStatus.METHOD_NOT_ALLOWED,
-                error_page(405, "Method not allowed", "This endpoint is not enabled."),
-                include_body=True,
-                extra_headers={"Allow": "GET, HEAD"},
-            )
+        if (
+            target.path == "/analysis-requests"
+            and self.server.jobs is not None
+            and self.server.config.analysis is not None
+        ):
+            self._post_analysis_request()
             return
+        if (
+            target.path == "/review-requests"
+            and self.server.jobs is not None
+            and self.server.config.review is not None
+        ):
+            self._post_review_request()
+            return
+        self._send_html(
+            HTTPStatus.METHOD_NOT_ALLOWED,
+            error_page(405, "Method not allowed", "This endpoint is not enabled."),
+            include_body=True,
+            extra_headers={"Allow": "GET, HEAD"},
+        )
+
+    def _post_analysis_request(self) -> None:
         try:
             self._validate_same_origin()
             form = self._read_form()
@@ -90,6 +141,52 @@ class PortalHandler(BaseHTTPRequestHandler):
             self._send_html(
                 HTTPStatus.BAD_REQUEST,
                 error_page(400, "Analysis request rejected", str(exc)),
+                include_body=True,
+            )
+
+    def _post_review_request(self) -> None:
+        review = self.server.config.review
+        assert review is not None and self.server.jobs is not None
+        try:
+            self._validate_same_origin()
+            form = self._read_form()
+            finding_id = _positive_integer(
+                _one(form, "finding_id"), fallback=0
+            )
+            expected_disposition = _one(form, "expected_disposition")
+            disposition = _one(form, "disposition")
+            if disposition not in self.review_dispositions:
+                raise ValueError("review disposition is not allowed")
+            supplied_token = _one(form, "csrf_token")
+            expected_token = self.server.review_csrf_token(
+                finding_id, expected_disposition
+            )
+            if not hmac.compare_digest(supplied_token, expected_token):
+                self._send_html(
+                    HTTPStatus.FORBIDDEN,
+                    error_page(
+                        403,
+                        "Request rejected",
+                        "The review request token is invalid.",
+                    ),
+                    include_body=True,
+                )
+                return
+            candidate = resolve_review_candidate(
+                self.server.config.database_path,
+                finding_id,
+                expected_disposition,
+            )
+            job, _created = self.server.jobs.enqueue_review(
+                candidate,
+                disposition=disposition,
+                reviewer=review.reviewer,
+            )
+            self._redirect(f"/review-jobs/{job['id']}")
+        except (AnalysisSelectionError, JobStoreError, OSError, ValueError) as exc:
+            self._send_html(
+                HTTPStatus.BAD_REQUEST,
+                error_page(400, "Review request rejected", str(exc)),
                 include_body=True,
             )
 
@@ -124,6 +221,59 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_html(
                     HTTPStatus.OK,
                     unreviewed_findings_page(result),
+                    include_body=include_body,
+                )
+                return
+            if (
+                target.path.startswith("/findings/")
+                and target.path.endswith("/source/download")
+            ):
+                if self.server.config.evidence is None:
+                    self._not_found(include_body)
+                    return
+                raw_id = target.path[
+                    len("/findings/") : -len("/source/download")
+                ].strip("/")
+                finding_id = _positive_integer(raw_id, fallback=0)
+                metadata = self.server.catalog.finding_source_metadata(finding_id)
+                if metadata is None:
+                    self._not_found(include_body)
+                    return
+                content = download_finding_source(
+                    self.server.config.database_path,
+                    self.server.config.evidence,
+                    finding_id,
+                )
+                filename = _attachment_filename(str(metadata["subject_path"]))
+                self._send_bytes(
+                    HTTPStatus.OK,
+                    content,
+                    "application/octet-stream",
+                    include_body=include_body,
+                    extra_headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
+                )
+                return
+            if (
+                target.path.startswith("/findings/")
+                and target.path.endswith("/source")
+            ):
+                if self.server.config.evidence is None:
+                    self._not_found(include_body)
+                    return
+                raw_id = target.path[
+                    len("/findings/") : -len("/source")
+                ].strip("/")
+                finding_id = _positive_integer(raw_id, fallback=0)
+                source = read_finding_source(
+                    self.server.config.database_path,
+                    self.server.config.evidence,
+                    finding_id,
+                )
+                self._send_html(
+                    HTTPStatus.OK,
+                    finding_source_page(source),
                     include_body=include_body,
                 )
                 return
@@ -163,9 +313,30 @@ class PortalHandler(BaseHTTPRequestHandler):
                 if detail is None:
                     self._not_found(include_body)
                     return
+                self._decorate_finding_actions(detail)
                 self._send_html(
                     HTTPStatus.OK,
                     analysis_detail_page(detail),
+                    include_body=include_body,
+                )
+                return
+            if target.path.startswith("/review-jobs/"):
+                if (
+                    self.server.jobs is None
+                    or self.server.config.analysis is None
+                ):
+                    self._not_found(include_body)
+                    return
+                job_id = _positive_integer(
+                    target.path[len("/review-jobs/") :], fallback=0
+                )
+                job = self.server.jobs.get_review(job_id)
+                if job is None:
+                    self._not_found(include_body)
+                    return
+                self._send_html(
+                    HTTPStatus.OK,
+                    review_job_detail_page(job),
                     include_body=include_body,
                 )
                 return
@@ -214,7 +385,7 @@ class PortalHandler(BaseHTTPRequestHandler):
                 error_page(503, "Portal data unavailable", str(exc)),
                 include_body=include_body,
             )
-        except (OSError, ValueError) as exc:
+        except (EvidenceError, OSError, ValueError) as exc:
             self._send_html(
                 HTTPStatus.BAD_REQUEST,
                 error_page(400, "Invalid request", str(exc)),
@@ -238,6 +409,25 @@ class PortalHandler(BaseHTTPRequestHandler):
                         "csrf_token": self.server.csrf_token(version_id, int(package["id"])),
                     }
 
+    def _decorate_finding_actions(self, detail: dict[str, object]) -> None:
+        schema = self.server.catalog.schema_status()
+        for finding in detail["findings"]:  # type: ignore[index]
+            finding["source_enabled"] = self.server.config.evidence is not None
+            if (
+                self.server.config.review is None
+                or not schema["analysis_available"]
+            ):
+                continue
+            current = str(finding["disposition"])
+            finding["review_request"] = {
+                "csrf_token": self.server.review_csrf_token(
+                    int(finding["id"]), current
+                ),
+                "dispositions": sorted(
+                    self.review_dispositions - {current}
+                ),
+            }
+
     def _read_form(self) -> dict[str, list[str]]:
         content_type = self.headers.get("Content-Type", "")
         if not content_type.lower().startswith("application/x-www-form-urlencoded"):
@@ -250,7 +440,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             raise ValueError("Content-Length must be a decimal integer") from exc
         if length < 0 or length > self.maximum_form_bytes:
-            raise ValueError("analysis request body is too large")
+            raise ValueError("request body is too large")
         body = self.rfile.read(length)
         return parse_qs(body.decode("utf-8", errors="strict"), keep_blank_values=True)
 
@@ -344,7 +534,16 @@ def main() -> int:
     except (ConfigurationError, CatalogError, JobStoreError, OSError) as exc:
         print(f"portal startup failed: {exc}", file=sys.stderr)
         return 2
-    mode = "analysis-enabled" if config.analysis else "read-only"
+    modes = [
+        name
+        for name, enabled in (
+            ("analysis", config.analysis is not None),
+            ("evidence", config.evidence is not None),
+            ("review", config.review is not None),
+        )
+        if enabled
+    ]
+    mode = ",".join(modes) if modes else "read-only"
     print(
         f"MCP assurance portal listening on http://{config.host}:{server.server_port} "
         f"using catalog {config.database_path} mode={mode}",
@@ -365,6 +564,18 @@ def _positive_integer(raw: str, *, fallback: int) -> int:
     except (TypeError, ValueError):
         return fallback
     return value if value > 0 else fallback
+
+
+def _attachment_filename(subject_path: str) -> str:
+    name = Path(subject_path).name
+    safe = "".join(
+        character
+        if character.isascii()
+        and (character.isalnum() or character in "._-")
+        else "_"
+        for character in name
+    )[:120]
+    return safe if safe not in {"", ".", ".."} else "source.txt"
 
 
 def _one(form: dict[str, list[str]], name: str) -> str:

@@ -3,7 +3,10 @@ import tempfile
 import unittest
 
 from fixture_catalog import create_fixture
-from mcp_portal.analysis_catalog import resolve_candidate
+from mcp_portal.analysis_catalog import (
+    resolve_candidate,
+    resolve_review_candidate,
+)
 from mcp_portal.jobs import JobStore
 
 
@@ -36,6 +39,34 @@ class JobTests(unittest.TestCase):
                 output_truncated=False,
             )
             self.assertEqual(store.get(claimed["id"])["status"], "completed")
+
+    def test_enqueue_claim_and_complete_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            catalog = root / "catalog.sqlite"
+            create_fixture(catalog)
+            store = JobStore(root / "jobs.sqlite")
+            candidate = resolve_review_candidate(catalog, 1, "unreviewed")
+            first, created = store.enqueue_review(
+                candidate, disposition="expected", reviewer="job-test"
+            )
+            self.assertTrue(created)
+            second, created = store.enqueue_review(
+                candidate, disposition="expected", reviewer="job-test"
+            )
+            self.assertFalse(created)
+            self.assertEqual(first["id"], second["id"])
+            claimed = store.claim_next_review()
+            self.assertEqual(claimed["status"], "running")
+            store.complete_review(
+                claimed["id"],
+                review_id=7,
+                return_code=0,
+                stdout_excerpt="{}",
+                stderr_excerpt="",
+                output_truncated=False,
+            )
+            self.assertEqual(store.get_review(claimed["id"])["status"], "completed")
 
 
 if __name__ == "__main__":

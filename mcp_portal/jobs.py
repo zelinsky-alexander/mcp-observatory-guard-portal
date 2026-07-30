@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 
-from .analysis_catalog import AnalysisCandidate
+from .analysis_catalog import AnalysisCandidate, ReviewCandidate
 
 
 class JobStoreError(RuntimeError):
@@ -17,7 +17,7 @@ class JobStoreError(RuntimeError):
 
 
 class JobStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: Path):
         self.path = path.resolve()
@@ -76,6 +76,31 @@ class JobStore:
                     WHERE status IN ('queued','running');
                     CREATE INDEX IF NOT EXISTS analysis_jobs_status
                     ON analysis_jobs(status, requested_at, id);
+                    CREATE TABLE IF NOT EXISTS review_jobs(
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        finding_id INTEGER NOT NULL,
+                        analysis_run_id INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        subject_path TEXT NOT NULL,
+                        expected_disposition TEXT NOT NULL,
+                        disposition TEXT NOT NULL,
+                        reviewer TEXT NOT NULL,
+                        requested_at TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed')),
+                        started_at TEXT,
+                        completed_at TEXT,
+                        review_id INTEGER,
+                        return_code INTEGER,
+                        stdout_excerpt TEXT NOT NULL DEFAULT '',
+                        stderr_excerpt TEXT NOT NULL DEFAULT '',
+                        output_truncated INTEGER NOT NULL DEFAULT 0 CHECK(output_truncated IN (0,1)),
+                        error_message TEXT
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS active_review_job
+                    ON review_jobs(finding_id)
+                    WHERE status IN ('queued','running');
+                    CREATE INDEX IF NOT EXISTS review_jobs_status
+                    ON review_jobs(status, requested_at, id);
                     """
                 )
                 row = connection.execute(
@@ -84,6 +109,11 @@ class JobStore:
                 if row is None:
                     connection.execute(
                         "INSERT INTO schema_info(singleton, schema_version) VALUES(1, ?)",
+                        (self.SCHEMA_VERSION,),
+                    )
+                elif int(row[0]) == 1:
+                    connection.execute(
+                        "UPDATE schema_info SET schema_version=? WHERE singleton=1",
                         (self.SCHEMA_VERSION,),
                     )
                 elif int(row[0]) != self.SCHEMA_VERSION:
@@ -266,13 +296,212 @@ class JobStore:
                           SUM(status='completed') AS completed, SUM(status='failed') AS failed
                    FROM analysis_jobs"""
             ).fetchone()
+            review_row = connection.execute(
+                """
+                SELECT SUM(status='queued') AS queued,
+                       SUM(status='running') AS running,
+                       SUM(status='completed') AS completed,
+                       SUM(status='failed') AS failed
+                FROM review_jobs
+                """
+            ).fetchone()
         return {
             "queued": int(row["queued"] or 0),
             "running": int(row["running"] or 0),
             "completed": int(row["completed"] or 0),
             "failed": int(row["failed"] or 0),
             "recent": self.recent(12),
+            "review": {
+                "queued": int(review_row["queued"] or 0),
+                "running": int(review_row["running"] or 0),
+                "completed": int(review_row["completed"] or 0),
+                "failed": int(review_row["failed"] or 0),
+                "recent": self.recent_reviews(12),
+            },
         }
+
+    def enqueue_review(
+        self,
+        candidate: ReviewCandidate,
+        *,
+        disposition: str,
+        reviewer: str,
+    ) -> tuple[dict[str, Any], bool]:
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """
+                    SELECT * FROM review_jobs
+                    WHERE finding_id=? AND status IN ('queued','running')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (candidate.finding_id,),
+                ).fetchone()
+                if existing is not None:
+                    return dict(existing), False
+                cursor = connection.execute(
+                    """
+                    INSERT INTO review_jobs(
+                        finding_id, analysis_run_id, title, subject_path,
+                        expected_disposition, disposition, reviewer,
+                        requested_at, status)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, 'queued')
+                    """,
+                    (
+                        candidate.finding_id,
+                        candidate.analysis_run_id,
+                        candidate.title,
+                        candidate.subject_path,
+                        candidate.expected_disposition,
+                        disposition,
+                        reviewer,
+                        _utc_now(),
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM review_jobs WHERE id=?", (cursor.lastrowid,)
+                ).fetchone()
+                assert row is not None
+                return dict(row), True
+        except sqlite3.IntegrityError:
+            with self._connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT * FROM review_jobs
+                    WHERE finding_id=? AND status IN ('queued','running')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (candidate.finding_id,),
+                ).fetchone()
+            if row is None:
+                raise JobStoreError(
+                    "review request conflicted but no active job was found"
+                )
+            return dict(row), False
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot enqueue review request: {exc}") from exc
+
+    def claim_next_review(self) -> dict[str, Any] | None:
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """
+                    SELECT * FROM review_jobs
+                    WHERE status='queued' ORDER BY requested_at, id LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    return None
+                cursor = connection.execute(
+                    """
+                    UPDATE review_jobs SET status='running', started_at=?
+                    WHERE id=? AND status='queued'
+                    """,
+                    (_utc_now(), row["id"]),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    return None
+                claimed = connection.execute(
+                    "SELECT * FROM review_jobs WHERE id=?", (row["id"],)
+                ).fetchone()
+                assert claimed is not None
+                return dict(claimed)
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot claim review job: {exc}") from exc
+
+    def complete_review(
+        self,
+        job_id: int,
+        *,
+        review_id: int,
+        return_code: int,
+        stdout_excerpt: str,
+        stderr_excerpt: str,
+        output_truncated: bool,
+    ) -> None:
+        self._finish_review(
+            job_id,
+            status="completed",
+            review_id=review_id,
+            return_code=return_code,
+            stdout_excerpt=stdout_excerpt,
+            stderr_excerpt=stderr_excerpt,
+            output_truncated=int(output_truncated),
+            error_message=None,
+        )
+
+    def fail_review(
+        self,
+        job_id: int,
+        *,
+        error_message: str,
+        return_code: int | None = None,
+        stdout_excerpt: str = "",
+        stderr_excerpt: str = "",
+        output_truncated: bool = False,
+    ) -> None:
+        self._finish_review(
+            job_id,
+            status="failed",
+            review_id=None,
+            return_code=return_code,
+            stdout_excerpt=stdout_excerpt,
+            stderr_excerpt=stderr_excerpt,
+            output_truncated=int(output_truncated),
+            error_message=error_message[:2000],
+        )
+
+    def _finish_review(self, job_id: int, *, status: str, **values: Any) -> None:
+        try:
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE review_jobs
+                    SET status=:status, completed_at=:completed_at,
+                        review_id=:review_id, return_code=:return_code,
+                        stdout_excerpt=:stdout_excerpt,
+                        stderr_excerpt=:stderr_excerpt,
+                        output_truncated=:output_truncated,
+                        error_message=:error_message
+                    WHERE id=:job_id AND status='running'
+                    """,
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "completed_at": _utc_now(),
+                        **values,
+                    },
+                )
+                if cursor.rowcount != 1:
+                    raise JobStoreError(f"review job {job_id} is not running")
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot finish review job: {exc}") from exc
+
+    def get_review(self, job_id: int) -> dict[str, Any] | None:
+        if job_id <= 0:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM review_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            return None if row is None else dict(row)
+
+    def recent_reviews(self, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 200))
+        with self._connect() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT * FROM review_jobs
+                    ORDER BY requested_at DESC, id DESC LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            ]
 
 
 def _utc_now() -> str:

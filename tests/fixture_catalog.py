@@ -22,6 +22,7 @@ CREATE TABLE analysis_findings(id INTEGER PRIMARY KEY, analysis_run_id INTEGER N
 CREATE TABLE analysis_files(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, archive_path TEXT NOT NULL, file_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, executable INTEGER NOT NULL, native_binary INTEGER NOT NULL, generated INTEGER NOT NULL, minified INTEGER NOT NULL, UNIQUE(analysis_run_id, archive_path));
 CREATE TABLE analysis_dependencies(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, dependency_type TEXT NOT NULL, dependency_name TEXT NOT NULL, declared_version TEXT NOT NULL, resolved_version TEXT, direct INTEGER NOT NULL, development INTEGER NOT NULL);
 CREATE TABLE analysis_evidence(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, evidence_type TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, byte_size INTEGER NOT NULL, media_type TEXT NOT NULL, UNIQUE(analysis_run_id, relative_path));
+CREATE TABLE analysis_finding_reviews(id INTEGER PRIMARY KEY, finding_id INTEGER NOT NULL, previous_disposition TEXT NOT NULL, disposition TEXT NOT NULL, reviewer TEXT NOT NULL, reviewed_at TEXT NOT NULL);
 """
 
 
@@ -29,7 +30,7 @@ def create_fixture(path: Path) -> None:
     connection = sqlite3.connect(path)
     try:
         connection.executescript(SCHEMA)
-        connection.execute("INSERT INTO schema_info VALUES(1, 2, 'test', 'like')")
+        connection.execute("INSERT INTO schema_info VALUES(1, 3, 'test', 'like')")
         connection.execute(
             "INSERT INTO snapshots VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (

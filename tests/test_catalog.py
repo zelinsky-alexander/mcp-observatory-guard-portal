@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -82,6 +83,22 @@ class CatalogTests(unittest.TestCase):
         assert detail is not None
         self.assertEqual(detail["findings"][0]["severity"], "high")
         self.assertEqual(detail["evidence_files"][0]["relative_path"], "analysis-summary.json")
+
+    def test_analysis_detail_includes_review_history(self) -> None:
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            """
+            INSERT INTO analysis_finding_reviews
+            VALUES(1, 1, 'unreviewed', 'expected', 'catalog-test',
+                   '2026-07-30T12:00:00Z')
+            """
+        )
+        connection.commit()
+        connection.close()
+        detail = self.catalog.analysis_detail(100)
+        self.assertEqual(
+            detail["findings"][0]["reviews"][0]["disposition"], "expected"
+        )
 
 
 if __name__ == "__main__":

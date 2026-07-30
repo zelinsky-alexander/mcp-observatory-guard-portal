@@ -10,8 +10,10 @@ The portal browses the SQLite catalog and static-analysis records produced by [`
 - Searchable server browser with one current row per Registry server identifier.
 - Package ecosystem report with package-record, unique-identifier, and server-version counts, linking to the filtered server browser.
 - Server detail with immutable metadata variants, packages, declared environment names, remotes, snapshot history, analysis history, and eligible analysis actions.
-- Static-analysis detail with findings and finalized evidence metadata.
-- Portal-owned analysis queue and job detail pages.
+- Static-analysis detail with findings, finalized evidence metadata, bounded
+  source links, full verified-file downloads for truncated views, review
+  history, and explicit review-disposition forms.
+- Portal-owned analysis and review queues with job detail pages.
 - `/healthz` schema check.
 
 ## Default read-only mode
@@ -49,6 +51,24 @@ Run the single-job worker in a second terminal:
 python3 -m mcp_portal.worker
 ```
 
+## Enable source review
+
+Source viewing and authoritative finding review are separate, loopback-only
+capabilities. They reuse the fixed Observatory binary and evidence/job paths:
+
+```bash
+export MCP_PORTAL_ENABLE_EVIDENCE_VIEW=1
+export MCP_PORTAL_ENABLE_REVIEW=1
+export MCP_PORTAL_REVIEWER=local-reviewer
+
+export MCP_PORTAL_JOBS_DATABASE=/home/alex/source/mcp-observatory-guard-portal/runtime/portal-jobs.sqlite
+export MCP_PORTAL_OBSERVATORY_BINARY=/home/alex/source/mcp-observatory/build/release/mcp-observatory
+export MCP_PORTAL_EVIDENCE_ROOT=/home/alex/source/mcp-observatory/evidence
+```
+
+Run `python3 -m mcp_portal.worker` for queued reviews. The reviewer identity is
+server-side configuration and is never accepted from an HTTP form.
+
 For scheduled or diagnostic use, process at most one queued job:
 
 ```bash
@@ -59,6 +79,8 @@ Optional limits:
 
 - `MCP_PORTAL_PAGE_SIZE`: 1–100, default 50.
 - `MCP_PORTAL_ANALYSIS_TIMEOUT_SECONDS`: 30–7200, default 900.
+- `MCP_PORTAL_EVIDENCE_TIMEOUT_SECONDS`: 1–60, default 10.
+- `MCP_PORTAL_MAXIMUM_DOWNLOAD_BYTES`: 131072–8388608, default 8388608.
 - `MCP_PORTAL_MAXIMUM_OUTPUT_BYTES`: 4096–1048576 per stdout/stderr stream, default 65536.
 - `MCP_PORTAL_WORKER_POLL_SECONDS`: 1–60, default 2.
 
@@ -69,13 +91,19 @@ Create the `runtime` directory before startup. The portal creates only its own j
 The portal:
 
 - opens the Observatory SQLite catalog with `mode=ro` and `query_only`;
-- stores queue state in a separate portal-owned SQLite database;
+- stores analysis and review job lifecycle state in a separate portal-owned
+  SQLite database;
 - accepts analysis requests only for exact existing `server_version_id` and `package_id` pairs;
 - re-resolves those IDs from the catalog both at submission and immediately before execution;
 - supports npm packages with an exact declared package version only;
 - protects browser submissions with an HMAC CSRF token and same-origin checks;
 - starts a separate worker with a fixed executable and argument vector using `shell=False`;
 - never exposes `--force`, arbitrary package names, URLs, commands, paths, or extra CLI flags through HTTP;
+- opens finding source only through an existing internal finding ID and the
+  Observatory bounded evidence reader;
+- submits only fixed, allowlisted review dispositions, with the expected current
+  disposition providing optimistic concurrency;
+- leaves authoritative review writes and audit history to `mcp-observatory`;
 - deduplicates queued and running jobs for the same exact package record;
 - bounds stdout and stderr capture and terminates the process group on timeout;
 - passes a minimal environment to the child process;
@@ -89,8 +117,9 @@ A completed static-analysis result does **not** prove that an MCP server is safe
 ## Requirements
 
 - Python 3.12 or newer.
-- An existing `mcp-observatory` SQLite catalog using schema version 1 or 2.
-- Schema version 2 to display or create static-analysis results.
+- An existing `mcp-observatory` SQLite catalog using schema version 1, 2, or 3.
+- Schema version 2 or 3 to display static-analysis results. The Observatory
+  review command migrates version 2 to version 3 before recording a review.
 - For on-demand analysis: a working release build of `mcp-observatory`, Docker access required by its analyzer, the versioned analysis rules file, and an existing evidence directory.
 
 ## Tests
