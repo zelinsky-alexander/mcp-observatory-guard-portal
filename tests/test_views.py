@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from mcp_portal.views import finding_source_page
+from mcp_portal.views import finding_source_page, runtime_observation_page
 
 
 class ViewTests(unittest.TestCase):
@@ -53,6 +53,32 @@ class ViewTests(unittest.TestCase):
             }
         )
         self.assertNotIn("/source/download", html)
+
+    def test_runtime_observation_escapes_inventory_text(self) -> None:
+        html = runtime_observation_page(
+            {
+                "id": 1,
+                "server_identifier": "<server>",
+                "server_version": "1.0.0",
+                "status": "completed",
+                "package_identifier": "<package>",
+                "artifact_sha256": "a" * 64,
+                "inventory_sha256": "b" * 64,
+                "sandbox_image": "node:test",
+                "tools": [
+                    {
+                        "name": "<script>",
+                        "definition_sha256": "c" * 64,
+                        "definition_json": "<img src=x>",
+                        "definition_truncated": 1,
+                    }
+                ],
+            }
+        )
+        self.assertNotIn("<script>", html)
+        self.assertNotIn("<img src=x>", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn("bounded display", html)
 
 
 if __name__ == "__main__":

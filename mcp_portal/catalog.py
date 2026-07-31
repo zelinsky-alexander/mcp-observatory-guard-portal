@@ -37,6 +37,10 @@ class Catalog:
         "analysis_evidence",
     }
     REVIEW_TABLE = "analysis_finding_reviews"
+    RUNTIME_TABLES = {
+        "runtime_observation_runs",
+        "runtime_observation_tools",
+    }
 
     def __init__(self, database_path: Path):
         self._database_path = database_path.resolve()
@@ -91,7 +95,40 @@ class Catalog:
                 "search_mode": row["search_mode"],
                 "analysis_available": self.ANALYSIS_TABLES.issubset(tables),
                 "review_available": self.REVIEW_TABLE in tables,
+                "runtime_available": self.RUNTIME_TABLES.issubset(tables),
             }
+
+    def runtime_observation(self, run_id: int) -> dict[str, Any] | None:
+        if run_id <= 0:
+            return None
+        if not self.schema_status()["runtime_available"]:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT r.*,sv.server_identifier,sv.server_version,
+                          p.identifier AS package_identifier,
+                          p.version AS package_version
+                   FROM runtime_observation_runs r
+                   JOIN server_versions sv ON sv.id=r.server_version_id
+                   JOIN packages p ON p.id=r.package_id
+                   WHERE r.id=?""",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            result["tools"] = [
+                dict(tool)
+                for tool in connection.execute(
+                    """SELECT name,substr(definition_json,1,4096) AS definition_json,
+                              length(definition_json) > 4096 AS definition_truncated,
+                              definition_sha256
+                       FROM runtime_observation_tools WHERE run_id=?
+                       ORDER BY name COLLATE BINARY LIMIT 256""",
+                    (run_id,),
+                ).fetchall()
+            ]
+            return result
 
     def dashboard(self, *, recent_limit: int = 12) -> dict[str, Any]:
         status = self.schema_status()

@@ -45,14 +45,24 @@ def main() -> int:
     try:
         threshold = datetime.now(timezone.utc).timestamp() - args.maximum_running_minutes * 60
         with sqlite3.connect(f"file:{args.jobs.resolve()}?mode=ro", uri=True) as db:
-            stale = db.execute(
-                """SELECT COUNT(*) FROM analysis_jobs
+            rows = db.execute(
+                """SELECT 'analysis',COUNT(*) FROM analysis_jobs
                    WHERE status='running' AND started_at IS NOT NULL
-                     AND CAST(strftime('%s', started_at) AS INTEGER) < ?""",
-                (int(threshold),),
-            ).fetchone()[0]
-            if stale:
-                errors.append(f"{stale} analysis job(s) have been running too long")
+                     AND CAST(strftime('%s',started_at) AS INTEGER) < ?
+                   UNION ALL SELECT 'review',COUNT(*) FROM review_jobs
+                   WHERE status='running' AND started_at IS NOT NULL
+                     AND CAST(strftime('%s',started_at) AS INTEGER) < ?
+                   UNION ALL SELECT 'runtime-discovery',COUNT(*)
+                   FROM runtime_discovery_jobs
+                   WHERE status='running' AND started_at IS NOT NULL
+                     AND CAST(strftime('%s',started_at) AS INTEGER) < ?""",
+                (int(threshold), int(threshold), int(threshold)),
+            ).fetchall()
+            for label, stale in rows:
+                if stale:
+                    errors.append(
+                        f"{stale} {label} job(s) have been running too long"
+                    )
     except sqlite3.Error as exc:
         errors.append(f"job queue unavailable: {exc}")
 

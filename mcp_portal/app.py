@@ -15,6 +15,7 @@ from .analysis_catalog import (
     AnalysisSelectionError,
     resolve_candidate,
     resolve_review_candidate,
+    resolve_runtime_candidate,
 )
 from .catalog import Catalog, CatalogError
 from .config import Config, ConfigurationError
@@ -29,6 +30,8 @@ from .views import (
     jobs_page,
     finding_source_page,
     review_job_detail_page,
+    runtime_job_detail_page,
+    runtime_observation_page,
     server_detail_page,
     servers_page,
     unreviewed_findings_page,
@@ -55,6 +58,15 @@ class PortalServer(ThreadingHTTPServer):
                     "analysis and review must use the same portal job database"
                 )
             jobs_path = config.review.jobs_database_path
+        if config.runtime_discovery is not None:
+            if (
+                jobs_path is not None
+                and jobs_path != config.runtime_discovery.jobs_database_path
+            ):
+                raise ConfigurationError(
+                    "analysis, review, and runtime discovery must use the same portal job database"
+                )
+            jobs_path = config.runtime_discovery.jobs_database_path
         self.jobs = JobStore(jobs_path) if jobs_path is not None else None
         self.csrf_secret = secrets.token_bytes(32)
         super().__init__(address, PortalHandler)
@@ -69,6 +81,10 @@ class PortalServer(ThreadingHTTPServer):
         message = (
             f"review:{finding_id}:{expected_disposition}".encode("ascii")
         )
+        return hmac.new(self.csrf_secret, message, hashlib.sha256).hexdigest()
+
+    def runtime_csrf_token(self, server_version_id: int, package_id: int) -> str:
+        message = f"runtime:{server_version_id}:{package_id}".encode("ascii")
         return hmac.new(self.csrf_secret, message, hashlib.sha256).hexdigest()
 
 
@@ -110,6 +126,13 @@ class PortalHandler(BaseHTTPRequestHandler):
         ):
             self._post_review_request()
             return
+        if (
+            target.path == "/runtime-discovery-requests"
+            and self.server.jobs is not None
+            and self.server.config.runtime_discovery is not None
+        ):
+            self._post_runtime_request()
+            return
         self._send_html(
             HTTPStatus.METHOD_NOT_ALLOWED,
             error_page(405, "Method not allowed", "This endpoint is not enabled."),
@@ -150,9 +173,7 @@ class PortalHandler(BaseHTTPRequestHandler):
         try:
             self._validate_same_origin()
             form = self._read_form()
-            finding_id = _positive_integer(
-                _one(form, "finding_id"), fallback=0
-            )
+            finding_id = _positive_integer(_one(form, "finding_id"), fallback=0)
             expected_disposition = _one(form, "expected_disposition")
             disposition = _one(form, "disposition")
             if disposition not in self.review_dispositions:
@@ -187,6 +208,44 @@ class PortalHandler(BaseHTTPRequestHandler):
             self._send_html(
                 HTTPStatus.BAD_REQUEST,
                 error_page(400, "Review request rejected", str(exc)),
+                include_body=True,
+            )
+
+    def _post_runtime_request(self) -> None:
+        assert self.server.jobs is not None
+        try:
+            self._validate_same_origin()
+            form = self._read_form()
+            server_version_id = _positive_integer(
+                _one(form, "server_version_id"), fallback=0
+            )
+            package_id = _positive_integer(_one(form, "package_id"), fallback=0)
+            supplied_token = _one(form, "csrf_token")
+            expected_token = self.server.runtime_csrf_token(
+                server_version_id, package_id
+            )
+            if not hmac.compare_digest(supplied_token, expected_token):
+                self._send_html(
+                    HTTPStatus.FORBIDDEN,
+                    error_page(
+                        403,
+                        "Request rejected",
+                        "The runtime-discovery request token is invalid.",
+                    ),
+                    include_body=True,
+                )
+                return
+            candidate = resolve_runtime_candidate(
+                self.server.config.database_path,
+                server_version_id,
+                package_id,
+            )
+            job, _created = self.server.jobs.enqueue_runtime(candidate)
+            self._redirect(f"/runtime-jobs/{job['id']}")
+        except (AnalysisSelectionError, JobStoreError, OSError, ValueError) as exc:
+            self._send_html(
+                HTTPStatus.BAD_REQUEST,
+                error_page(400, "Runtime-discovery request rejected", str(exc)),
                 include_body=True,
             )
 
@@ -323,7 +382,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             if target.path.startswith("/review-jobs/"):
                 if (
                     self.server.jobs is None
-                    or self.server.config.analysis is None
+                    or self.server.config.review is None
                 ):
                     self._not_found(include_body)
                     return
@@ -337,6 +396,40 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._send_html(
                     HTTPStatus.OK,
                     review_job_detail_page(job),
+                    include_body=include_body,
+                )
+                return
+            if target.path.startswith("/runtime-jobs/"):
+                if (
+                    self.server.jobs is None
+                    or self.server.config.runtime_discovery is None
+                ):
+                    self._not_found(include_body)
+                    return
+                job_id = _positive_integer(
+                    target.path[len("/runtime-jobs/") :], fallback=0
+                )
+                job = self.server.jobs.get_runtime(job_id)
+                if job is None:
+                    self._not_found(include_body)
+                    return
+                self._send_html(
+                    HTTPStatus.OK,
+                    runtime_job_detail_page(job),
+                    include_body=include_body,
+                )
+                return
+            if target.path.startswith("/runtime-observations/"):
+                run_id = _positive_integer(
+                    target.path[len("/runtime-observations/") :], fallback=0
+                )
+                observation = self.server.catalog.runtime_observation(run_id)
+                if observation is None:
+                    self._not_found(include_body)
+                    return
+                self._send_html(
+                    HTTPStatus.OK,
+                    runtime_observation_page(observation),
                     include_body=include_body,
                 )
                 return
@@ -407,6 +500,30 @@ class PortalHandler(BaseHTTPRequestHandler):
                         "server_version_id": version_id,
                         "package_id": int(package["id"]),
                         "csrf_token": self.server.csrf_token(version_id, int(package["id"])),
+                    }
+                if self.server.config.runtime_discovery is None:
+                    package["runtime_unavailable_reason"] = (
+                        "runtime discovery is disabled"
+                    )
+                elif package["registry_type"] != "npm":
+                    package["runtime_unavailable_reason"] = (
+                        "only npm packages are supported"
+                    )
+                elif package["transport"] != "stdio":
+                    package["runtime_unavailable_reason"] = (
+                        "only stdio packages are supported"
+                    )
+                elif not package.get("version"):
+                    package["runtime_unavailable_reason"] = (
+                        "no exact package version is declared"
+                    )
+                else:
+                    package["runtime_request"] = {
+                        "server_version_id": version_id,
+                        "package_id": int(package["id"]),
+                        "csrf_token": self.server.runtime_csrf_token(
+                            version_id, int(package["id"])
+                        ),
                     }
 
     def _decorate_finding_actions(self, detail: dict[str, object]) -> None:
@@ -540,6 +657,7 @@ def main() -> int:
             ("analysis", config.analysis is not None),
             ("evidence", config.evidence is not None),
             ("review", config.review is not None),
+            ("runtime-discovery", config.runtime_discovery is not None),
         )
         if enabled
     ]

@@ -100,6 +100,37 @@ class CatalogTests(unittest.TestCase):
             detail["findings"][0]["reviews"][0]["disposition"], "expected"
         )
 
+    def test_runtime_observation_is_optional_and_bounded(self) -> None:
+        self.assertFalse(self.catalog.schema_status()["runtime_available"])
+        self.assertIsNone(self.catalog.runtime_observation(1))
+        connection = sqlite3.connect(self.database)
+        connection.executescript(
+            """CREATE TABLE runtime_observation_runs(
+            id INTEGER PRIMARY KEY,server_version_id INTEGER,package_id INTEGER,
+            status TEXT,artifact_sha256 TEXT,launch_profile_sha256 TEXT,
+            sandbox_image TEXT,guard_version TEXT,inventory_sha256 TEXT,
+            inventory_json TEXT,started_at TEXT,completed_at TEXT,error_stage TEXT,
+            error_message TEXT);
+            CREATE TABLE runtime_observation_tools(
+            run_id INTEGER,name TEXT,definition_json TEXT,definition_sha256 TEXT);
+            """
+        )
+        connection.execute(
+            "INSERT INTO runtime_observation_runs VALUES(1,1,10,'completed',?,?,?,?,?,'{}','start','done',NULL,NULL)",
+            ("a" * 64, "b" * 64, "node:test", "sha256:" + "c" * 64, "d" * 64),
+        )
+        connection.execute(
+            "INSERT INTO runtime_observation_tools VALUES(1,?,?,?)",
+            ("<tool>", "x" * 5000, "e" * 64),
+        )
+        connection.commit()
+        connection.close()
+        observation = self.catalog.runtime_observation(1)
+        self.assertEqual(observation["package_identifier"], "@example/filesystem")
+        self.assertEqual(observation["tools"][0]["name"], "<tool>")
+        self.assertEqual(len(observation["tools"][0]["definition_json"]), 4096)
+        self.assertEqual(observation["tools"][0]["definition_truncated"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

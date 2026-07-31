@@ -16,7 +16,7 @@ def layout(title: str, body: str) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{safe_title} · {PORTAL_NAME}</title><link rel="stylesheet" href="/static/portal.css"></head>
 <body><header class="site-header"><div><a class="brand" href="/">MCP Observatory</a><span class="tagline">Evidence, provenance, and change over time</span></div>
-<nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/servers">Servers</a><a href="/reports/ecosystems">Ecosystems</a><a href="/jobs">Analysis queue</a></nav></header>
+<nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/servers">Servers</a><a href="/reports/ecosystems">Ecosystems</a><a href="/jobs">Local jobs</a></nav></header>
 <main>{body}</main><footer>Results describe exact artifacts under documented analysis profiles. They do not prove safety or author intent.</footer></body></html>"""
 
 
@@ -218,7 +218,15 @@ def jobs_page(summary: dict[str, Any] | None) -> str:
         )
         for name in ("queued", "running", "completed", "failed")
     )
-    return layout("Analysis queue", f"""<section class="page-heading"><p class="eyebrow">Constrained local orchestration</p><h1>Analysis and review queues</h1><p>Only existing internal catalog identifiers and fixed operations can be submitted.</p></section><h2>Static-analysis jobs</h2><section class="cards">{cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Server</th><th>Package</th><th>Status</th><th>Requested</th></tr></thead><tbody>{rows}</tbody></table></div></section><h2>Finding-review jobs</h2><section class="cards">{review_cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Finding</th><th>Transition</th><th>Status</th><th>Requested</th></tr></thead><tbody>{review_rows}</tbody></table></div></section>""")
+    runtime = summary["runtime"]
+    runtime_rows = "".join(
+        _runtime_job_row(job) for job in runtime["recent"]
+    ) or '<tr><td colspan="5" class="empty">No runtime-discovery jobs have been submitted.</td></tr>'
+    runtime_cards = "".join(
+        _card(name.title(), runtime[name], "Portal-owned runtime job state")
+        for name in ("queued", "running", "completed", "failed")
+    )
+    return layout("Local jobs", f"""<section class="page-heading"><p class="eyebrow">Constrained local orchestration</p><h1>Analysis, runtime, and review queues</h1><p>Only existing internal catalog identifiers and fixed operations can be submitted.</p></section><h2>Static-analysis jobs</h2><section class="cards">{cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Server</th><th>Package</th><th>Status</th><th>Requested</th></tr></thead><tbody>{rows}</tbody></table></div></section><h2>Runtime-discovery jobs</h2><section class="cards">{runtime_cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Server</th><th>Package</th><th>Status</th><th>Requested</th></tr></thead><tbody>{runtime_rows}</tbody></table></div></section><h2>Finding-review jobs</h2><section class="cards">{review_cards}</section><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Job</th><th>Finding</th><th>Transition</th><th>Status</th><th>Requested</th></tr></thead><tbody>{review_rows}</tbody></table></div></section>""")
 
 
 def job_detail_page(job: dict[str, Any]) -> str:
@@ -249,6 +257,26 @@ def review_job_detail_page(job: dict[str, Any]) -> str:
     return layout(f"Review job #{job['id']}", body)
 
 
+def runtime_job_detail_page(job: dict[str, Any]) -> str:
+    error = f'<section class="notice danger"><strong>Failure:</strong> {escape(_text(job.get("error_message")))}</section>' if job.get("error_message") else ""
+    result = f'<a href="/runtime-observations/{job["runtime_observation_run_id"]}">Open runtime observation #{job["runtime_observation_run_id"]}</a>' if job.get("runtime_observation_run_id") else "No authoritative runtime observation recorded."
+    logs = ""
+    for title, value in (("Standard output", job.get("stdout_excerpt")), ("Standard error", job.get("stderr_excerpt"))):
+        if value:
+            logs += f"<h3>{title}</h3><pre>{escape(_text(value))}</pre>"
+    body = f"""<section class="page-heading"><p class="eyebrow">Runtime-discovery job #{job['id']}</p><h1>{escape(_text(job['server_identifier']))} <span class="muted">{escape(_text(job['server_version']))}</span></h1><p><span class="badge status-{escape(_text(job['status']))}">{escape(_text(job['status']))}</span> package <code>{escape(_text(job['package_identifier']))}</code></p></section>{error}<section class="panel"><dl class="facts"><div><dt>Requested</dt><dd>{escape(_text(job['requested_at']))}</dd></div><div><dt>Completed</dt><dd>{escape(_text(job.get('completed_at'), 'Not completed'))}</dd></div><div><dt>Artifact</dt><dd><code>{escape(_text(job.get('artifact_sha256'), 'Not available'))}</code></dd></div><div><dt>Inventory</dt><dd><code>{escape(_text(job.get('inventory_sha256'), 'Not available'))}</code></dd></div><div><dt>Tools observed</dt><dd>{escape(_text(job.get('tool_count'), 'Not available'))}</dd></div><div><dt>Result</dt><dd>{result}</dd></div></dl></section><section class="panel"><h2>Bounded worker output</h2>{logs or '<p class="empty">No worker output recorded.</p>'}</section><section class="notice"><strong>Interpretation boundary:</strong> runtime discovery records an MCP tool inventory. It does not invoke tools or establish a safety verdict.</section>"""
+    return layout(f"Runtime job #{job['id']}", body)
+
+
+def runtime_observation_page(observation: dict[str, Any]) -> str:
+    tools = "".join(
+        f'<article class="package"><strong>{escape(_text(tool["name"]))}</strong><div class="meta">Definition SHA-256 <code>{escape(_text(tool["definition_sha256"]))}</code></div><pre>{escape(_text(tool["definition_json"]))}{"\n… bounded display" if tool.get("definition_truncated") else ""}</pre></article>'
+        for tool in observation["tools"]
+    ) or '<p class="empty">No tools were observed.</p>'
+    body = f"""<section class="page-heading"><p class="eyebrow">Runtime observation #{observation['id']}</p><h1>{escape(_text(observation['server_identifier']))} <span class="muted">{escape(_text(observation['server_version']))}</span></h1><p><span class="badge status-{escape(_text(observation['status']))}">{escape(_text(observation['status']))}</span> package <code>{escape(_text(observation['package_identifier']))}</code></p></section><section class="cards">{_card('Tools', len(observation['tools']), 'Observed MCP tool definitions')}{_card('Artifact', _short_hash(observation.get('artifact_sha256')), 'Exact package digest')}{_card('Inventory', _short_hash(observation.get('inventory_sha256')), 'Canonical inventory digest')}{_card('Sandbox image', _text(observation.get('sandbox_image')), 'Configured runtime image')}</section><section class="panel"><h2>Observed tool inventory</h2>{tools}</section><section class="notice"><strong>Observation boundary:</strong> this records tool definitions exposed during constrained discovery. No MCP tool was invoked, and the result is not a safety verdict.</section>"""
+    return layout(f"Runtime observation #{observation['id']}", body)
+
+
 def error_page(status: int, title: str, message: str) -> str:
     return layout(title, f'<section class="page-heading"><p class="eyebrow">HTTP {status}</p><h1>{escape(title)}</h1><p>{escape(message)}</p><p><a href="/">Return to dashboard</a></p></section>')
 
@@ -275,7 +303,13 @@ def _package_block(package: dict[str, Any]) -> str:
         action = f"""<form class="analysis-form" method="post" action="/analysis-requests"><input type="hidden" name="server_version_id" value="{request['server_version_id']}"><input type="hidden" name="package_id" value="{request['package_id']}"><input type="hidden" name="csrf_token" value="{escape(request['csrf_token'], quote=True)}"><button type="submit">Queue static analysis</button><small>Compatible completed results may be reused. Force mode is not exposed.</small></form>"""
     elif package.get("analysis_unavailable_reason"):
         action = f'<p class="meta">Analysis unavailable: {escape(_text(package["analysis_unavailable_reason"]))}</p>'
-    return f"""<article class="package"><strong>{escape(_text(package['identifier']))}</strong><div class="meta">{escape(_text(package['registry_type']))} · {escape(_text(package['transport']))} · declared version {escape(_text(package['version'], 'not supplied'))}</div><p><span class="label">Arguments:</span> {arguments}</p><p class="label">Environment declarations:</p><ul>{environment}</ul>{action}</article>"""
+    runtime_request = package.get("runtime_request")
+    runtime_action = ""
+    if runtime_request:
+        runtime_action = f"""<form class="analysis-form" method="post" action="/runtime-discovery-requests"><input type="hidden" name="server_version_id" value="{runtime_request['server_version_id']}"><input type="hidden" name="package_id" value="{runtime_request['package_id']}"><input type="hidden" name="csrf_token" value="{escape(runtime_request['csrf_token'], quote=True)}"><button type="submit">Queue runtime discovery</button><small>Discovery runs offline after cache population and does not invoke tools.</small></form>"""
+    elif package.get("runtime_unavailable_reason"):
+        runtime_action = f'<p class="meta">Runtime discovery unavailable: {escape(_text(package["runtime_unavailable_reason"]))}</p>'
+    return f"""<article class="package"><strong>{escape(_text(package['identifier']))}</strong><div class="meta">{escape(_text(package['registry_type']))} · {escape(_text(package['transport']))} · declared version {escape(_text(package['version'], 'not supplied'))}</div><p><span class="label">Arguments:</span> {arguments}</p><p class="label">Environment declarations:</p><ul>{environment}</ul>{action}{runtime_action}</article>"""
 
 
 def _analysis_card(run: dict[str, Any]) -> str:
@@ -372,6 +406,10 @@ def _job_row(job: dict[str, Any]) -> str:
 
 def _review_job_row(job: dict[str, Any]) -> str:
     return f'<tr><td><a href="/review-jobs/{job["id"]}">#{job["id"]}</a></td><td><a href="/analyses/{job["analysis_run_id"]}#finding-{job["finding_id"]}">#{job["finding_id"]}</a><div class="meta">{escape(_text(job["title"]))}</div></td><td>{escape(_text(job["expected_disposition"]))} → {escape(_text(job["disposition"]))}</td><td><span class="badge status-{escape(_text(job["status"]))}">{escape(_text(job["status"]))}</span></td><td>{escape(_text(job["requested_at"]))}</td></tr>'
+
+
+def _runtime_job_row(job: dict[str, Any]) -> str:
+    return f'<tr><td><a href="/runtime-jobs/{job["id"]}">#{job["id"]}</a></td><td>{escape(_text(job["server_identifier"]))}<div class="meta">{escape(_text(job["server_version"]))}</div></td><td>{escape(_text(job["package_identifier"]))}</td><td><span class="badge status-{escape(_text(job["status"]))}">{escape(_text(job["status"]))}</span></td><td>{escape(_text(job["requested_at"]))}</td></tr>'
 
 
 def _card(label: str, value: Any, detail: str, detail_href: str | None = None) -> str:

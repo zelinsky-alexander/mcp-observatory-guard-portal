@@ -9,7 +9,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 
-from .analysis_catalog import AnalysisCandidate, ReviewCandidate
+from .analysis_catalog import AnalysisCandidate, ReviewCandidate, RuntimeCandidate
 
 
 class JobStoreError(RuntimeError):
@@ -17,7 +17,7 @@ class JobStoreError(RuntimeError):
 
 
 class JobStore:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: Path):
         self.path = path.resolve()
@@ -101,6 +101,35 @@ class JobStore:
                     WHERE status IN ('queued','running');
                     CREATE INDEX IF NOT EXISTS review_jobs_status
                     ON review_jobs(status, requested_at, id);
+                    CREATE TABLE IF NOT EXISTS runtime_discovery_jobs(
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        server_version_id INTEGER NOT NULL,
+                        package_id INTEGER NOT NULL,
+                        server_identifier TEXT NOT NULL,
+                        server_version TEXT NOT NULL,
+                        package_identifier TEXT NOT NULL,
+                        package_version TEXT NOT NULL,
+                        requested_at TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK(status IN ('queued','running','completed','failed')),
+                        started_at TEXT,
+                        completed_at TEXT,
+                        runtime_observation_run_id INTEGER,
+                        artifact_sha256 TEXT,
+                        launch_profile_sha256 TEXT,
+                        inventory_sha256 TEXT,
+                        guard_sha256 TEXT,
+                        tool_count INTEGER,
+                        return_code INTEGER,
+                        stdout_excerpt TEXT NOT NULL DEFAULT '',
+                        stderr_excerpt TEXT NOT NULL DEFAULT '',
+                        output_truncated INTEGER NOT NULL DEFAULT 0 CHECK(output_truncated IN (0,1)),
+                        error_message TEXT
+                    );
+                    CREATE UNIQUE INDEX IF NOT EXISTS active_runtime_discovery_job
+                    ON runtime_discovery_jobs(server_version_id, package_id)
+                    WHERE status IN ('queued','running');
+                    CREATE INDEX IF NOT EXISTS runtime_discovery_jobs_status
+                    ON runtime_discovery_jobs(status, requested_at, id);
                     """
                 )
                 row = connection.execute(
@@ -111,7 +140,7 @@ class JobStore:
                         "INSERT INTO schema_info(singleton, schema_version) VALUES(1, ?)",
                         (self.SCHEMA_VERSION,),
                     )
-                elif int(row[0]) == 1:
+                elif int(row[0]) in (1, 2):
                     connection.execute(
                         "UPDATE schema_info SET schema_version=? WHERE singleton=1",
                         (self.SCHEMA_VERSION,),
@@ -305,6 +334,13 @@ class JobStore:
                 FROM review_jobs
                 """
             ).fetchone()
+            runtime_row = connection.execute(
+                """SELECT SUM(status='queued') AS queued,
+                          SUM(status='running') AS running,
+                          SUM(status='completed') AS completed,
+                          SUM(status='failed') AS failed
+                   FROM runtime_discovery_jobs"""
+            ).fetchone()
         return {
             "queued": int(row["queued"] or 0),
             "running": int(row["running"] or 0),
@@ -317,6 +353,13 @@ class JobStore:
                 "completed": int(review_row["completed"] or 0),
                 "failed": int(review_row["failed"] or 0),
                 "recent": self.recent_reviews(12),
+            },
+            "runtime": {
+                "queued": int(runtime_row["queued"] or 0),
+                "running": int(runtime_row["running"] or 0),
+                "completed": int(runtime_row["completed"] or 0),
+                "failed": int(runtime_row["failed"] or 0),
+                "recent": self.recent_runtime(12),
             },
         }
 
@@ -499,6 +542,165 @@ class JobStore:
                     SELECT * FROM review_jobs
                     ORDER BY requested_at DESC, id DESC LIMIT ?
                     """,
+                    (limit,),
+                ).fetchall()
+            ]
+
+    def enqueue_runtime(
+        self, candidate: RuntimeCandidate
+    ) -> tuple[dict[str, Any], bool]:
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """SELECT * FROM runtime_discovery_jobs
+                       WHERE server_version_id=? AND package_id=?
+                         AND status IN ('queued','running')
+                       ORDER BY id DESC LIMIT 1""",
+                    (candidate.server_version_id, candidate.package_id),
+                ).fetchone()
+                if existing is not None:
+                    return dict(existing), False
+                values = asdict(candidate)
+                cursor = connection.execute(
+                    """INSERT INTO runtime_discovery_jobs(
+                       server_version_id,package_id,server_identifier,server_version,
+                       package_identifier,package_version,requested_at,status)
+                       VALUES(:server_version_id,:package_id,:server_identifier,
+                       :server_version,:package_identifier,:package_version,
+                       :requested_at,'queued')""",
+                    {**values, "requested_at": _utc_now()},
+                )
+                row = connection.execute(
+                    "SELECT * FROM runtime_discovery_jobs WHERE id=?",
+                    (cursor.lastrowid,),
+                ).fetchone()
+                assert row is not None
+                return dict(row), True
+        except sqlite3.IntegrityError:
+            current = self.find_active_runtime(
+                candidate.server_version_id, candidate.package_id
+            )
+            if current is None:
+                raise JobStoreError(
+                    "runtime request conflicted but no active job was found"
+                )
+            return current, False
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot enqueue runtime request: {exc}") from exc
+
+    def find_active_runtime(
+        self, server_version_id: int, package_id: int
+    ) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM runtime_discovery_jobs
+                   WHERE server_version_id=? AND package_id=?
+                     AND status IN ('queued','running')
+                   ORDER BY id DESC LIMIT 1""",
+                (server_version_id, package_id),
+            ).fetchone()
+            return None if row is None else dict(row)
+
+    def claim_next_runtime(self) -> dict[str, Any] | None:
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    """SELECT * FROM runtime_discovery_jobs WHERE status='queued'
+                       ORDER BY requested_at,id LIMIT 1"""
+                ).fetchone()
+                if row is None:
+                    return None
+                cursor = connection.execute(
+                    """UPDATE runtime_discovery_jobs SET status='running',started_at=?
+                       WHERE id=? AND status='queued'""",
+                    (_utc_now(), row["id"]),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    return None
+                claimed = connection.execute(
+                    "SELECT * FROM runtime_discovery_jobs WHERE id=?", (row["id"],)
+                ).fetchone()
+                assert claimed is not None
+                return dict(claimed)
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot claim runtime job: {exc}") from exc
+
+    def complete_runtime(self, job_id: int, **values: Any) -> None:
+        self._finish_runtime(job_id, status="completed", error_message=None, **values)
+
+    def fail_runtime(
+        self,
+        job_id: int,
+        *,
+        error_message: str,
+        return_code: int | None = None,
+        stdout_excerpt: str = "",
+        stderr_excerpt: str = "",
+        output_truncated: bool = False,
+    ) -> None:
+        self._finish_runtime(
+            job_id,
+            status="failed",
+            runtime_observation_run_id=None,
+            artifact_sha256=None,
+            launch_profile_sha256=None,
+            inventory_sha256=None,
+            guard_sha256=None,
+            tool_count=None,
+            return_code=return_code,
+            stdout_excerpt=stdout_excerpt,
+            stderr_excerpt=stderr_excerpt,
+            output_truncated=int(output_truncated),
+            error_message=error_message[:2000],
+        )
+
+    def _finish_runtime(self, job_id: int, *, status: str, **values: Any) -> None:
+        try:
+            with self._connect() as connection:
+                cursor = connection.execute(
+                    """UPDATE runtime_discovery_jobs SET
+                       status=:status,completed_at=:completed_at,
+                       runtime_observation_run_id=:runtime_observation_run_id,
+                       artifact_sha256=:artifact_sha256,
+                       launch_profile_sha256=:launch_profile_sha256,
+                       inventory_sha256=:inventory_sha256,
+                       guard_sha256=:guard_sha256,tool_count=:tool_count,
+                       return_code=:return_code,stdout_excerpt=:stdout_excerpt,
+                       stderr_excerpt=:stderr_excerpt,
+                       output_truncated=:output_truncated,error_message=:error_message
+                       WHERE id=:job_id AND status='running'""",
+                    {
+                        "job_id": job_id,
+                        "status": status,
+                        "completed_at": _utc_now(),
+                        **values,
+                    },
+                )
+                if cursor.rowcount != 1:
+                    raise JobStoreError(f"runtime job {job_id} is not running")
+        except sqlite3.Error as exc:
+            raise JobStoreError(f"cannot finish runtime job: {exc}") from exc
+
+    def get_runtime(self, job_id: int) -> dict[str, Any] | None:
+        if job_id <= 0:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM runtime_discovery_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            return None if row is None else dict(row)
+
+    def recent_runtime(self, limit: int = 50) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 200))
+        with self._connect() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    """SELECT * FROM runtime_discovery_jobs
+                       ORDER BY requested_at DESC,id DESC LIMIT ?""",
                     (limit,),
                 ).fetchall()
             ]

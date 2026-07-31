@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -17,8 +19,16 @@ from .analysis_catalog import (
     AnalysisSelectionError,
     resolve_candidate,
     resolve_review_candidate,
+    resolve_runtime_candidate,
+    resolve_runtime_result,
 )
-from .config import AnalysisConfig, Config, ConfigurationError, ReviewConfig
+from .config import (
+    AnalysisConfig,
+    Config,
+    ConfigurationError,
+    ReviewConfig,
+    RuntimeDiscoveryConfig,
+)
 from .jobs import JobStore, JobStoreError
 
 
@@ -168,6 +178,101 @@ def process_next_review(config: Config, store: JobStore) -> bool:
     return True
 
 
+def process_next_runtime(config: Config, store: JobStore) -> bool:
+    runtime = config.runtime_discovery
+    if runtime is None:
+        return False
+    job = store.claim_next_runtime()
+    if job is None:
+        return False
+    try:
+        candidate = resolve_runtime_candidate(
+            config.database_path,
+            int(job["server_version_id"]),
+            int(job["package_id"]),
+        )
+        for field in (
+            "server_identifier",
+            "server_version",
+            "package_identifier",
+            "package_version",
+        ):
+            if getattr(candidate, field) != job[field]:
+                raise WorkerError(
+                    f"catalog runtime selection changed before execution: {field}"
+                )
+        with _writer_lock(runtime.writer_lock_path):
+            result = run_bounded(
+                build_runtime_argv(config.database_path, runtime, candidate),
+                timeout_seconds=runtime.timeout_seconds * 3 + 240,
+                maximum_output_bytes=runtime.maximum_output_bytes,
+            )
+        stdout_text = result["stdout"].decode("utf-8", errors="replace")
+        stderr_text = result["stderr"].decode("utf-8", errors="replace")
+        if result["timed_out"]:
+            store.fail_runtime(
+                int(job["id"]),
+                error_message="runtime discovery exceeded its total execution limit",
+                return_code=result["return_code"],
+                stdout_excerpt=stdout_text,
+                stderr_excerpt=stderr_text,
+                output_truncated=result["truncated"],
+            )
+            return True
+        if result["return_code"] != 0 or result["truncated"]:
+            message = (
+                "runtime discovery output exceeded the portal limit"
+                if result["truncated"]
+                else "runtime discovery exited non-zero"
+            )
+            store.fail_runtime(
+                int(job["id"]),
+                error_message=message,
+                return_code=result["return_code"],
+                stdout_excerpt=stdout_text,
+                stderr_excerpt=stderr_text,
+                output_truncated=result["truncated"],
+            )
+            return True
+        payload = _parse_runtime_result(stdout_text)
+        observation = resolve_runtime_result(
+            config.database_path,
+            int(payload["runtime_observation_run_id"]),
+            candidate.server_version_id,
+            candidate.package_id,
+        )
+        if payload["artifact_sha256"] != observation.artifact_sha256:
+            raise WorkerError("runtime result artifact digest does not match the catalog row")
+        if payload["launch_profile_sha256"] != observation.launch_profile_sha256:
+            raise WorkerError("runtime result profile digest does not match the catalog row")
+        if payload["tool_count"] != observation.tool_count:
+            raise WorkerError("runtime result tool count does not match the catalog row")
+        if "sha256:" + payload["guard_sha256"] != observation.guard_version:
+            raise WorkerError("runtime result guard digest does not match the catalog row")
+        store.complete_runtime(
+            int(job["id"]),
+            runtime_observation_run_id=observation.runtime_observation_run_id,
+            artifact_sha256=observation.artifact_sha256,
+            launch_profile_sha256=observation.launch_profile_sha256,
+            inventory_sha256=observation.inventory_sha256,
+            guard_sha256=payload["guard_sha256"],
+            tool_count=observation.tool_count,
+            return_code=int(result["return_code"]),
+            stdout_excerpt=stdout_text,
+            stderr_excerpt=stderr_text,
+            output_truncated=0,
+        )
+    except (
+        AnalysisSelectionError,
+        WorkerError,
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as exc:
+        store.fail_runtime(int(job["id"]), error_message=str(exc))
+    return True
+
+
 def build_argv(database_path: Path, analysis: AnalysisConfig, candidate: Any) -> list[str]:
     return [
         str(analysis.observatory_binary),
@@ -210,6 +315,43 @@ def build_review_argv(
         "--format",
         "json",
     ]
+
+
+def build_runtime_argv(
+    database_path: Path, runtime: RuntimeDiscoveryConfig, candidate: Any
+) -> list[str]:
+    return [
+        sys.executable,
+        str(runtime.runner_path),
+        "observe",
+        "--database",
+        str(database_path),
+        "--server",
+        candidate.server_identifier,
+        "--version",
+        candidate.server_version,
+        "--package",
+        candidate.package_identifier,
+        "--guard-binary",
+        str(runtime.guard_binary),
+        "--evidence-root",
+        str(runtime.evidence_root),
+        "--runtime-image",
+        runtime.runtime_image,
+        "--timeout",
+        str(runtime.timeout_seconds),
+    ]
+
+
+@contextmanager
+def _writer_lock(path: Path):
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o640)
+    try:
+        with os.fdopen(descriptor, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+    except Exception:
+        raise
 
 
 def run_bounded(
@@ -342,6 +484,31 @@ def _parse_review_result(
     return payload
 
 
+def _parse_runtime_result(stdout_text: str) -> dict[str, Any]:
+    payload = json.loads(stdout_text)
+    if not isinstance(payload, dict) or payload.get("status") != "completed":
+        raise WorkerError("runtime discovery JSON did not report completed status")
+    run_id = payload.get("runtime_observation_run_id")
+    if not isinstance(run_id, int) or run_id <= 0:
+        raise WorkerError("runtime discovery JSON has no valid observation identifier")
+    for name in (
+        "artifact_sha256",
+        "launch_profile_sha256",
+        "guard_sha256",
+    ):
+        value = payload.get(name)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise WorkerError(f"runtime discovery JSON has no valid {name}")
+    tool_count = payload.get("tool_count")
+    if not isinstance(tool_count, int) or not 0 <= tool_count <= 256:
+        raise WorkerError("runtime discovery JSON has no valid tool count")
+    return payload
+
+
 def _optional_string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
@@ -352,24 +519,24 @@ def main(argv: list[str] | None = None) -> int:
     options = parser.parse_args(argv)
     try:
         config = Config.from_env()
-        if config.analysis is None and config.review is None:
-            raise ConfigurationError(
-                "analysis or review must be enabled for the worker"
-            )
-        jobs_path = (
-            config.analysis.jobs_database_path
-            if config.analysis is not None
-            else config.review.jobs_database_path  # type: ignore[union-attr]
-        )
         if (
-            config.analysis is not None
-            and config.review is not None
-            and config.analysis.jobs_database_path
-            != config.review.jobs_database_path
+            config.analysis is None
+            and config.review is None
+            and config.runtime_discovery is None
         ):
             raise ConfigurationError(
-                "analysis and review must use the same portal job database"
+                "analysis, review, or runtime discovery must be enabled for the worker"
             )
+        configured_paths = {
+            item.jobs_database_path
+            for item in (config.analysis, config.review, config.runtime_discovery)
+            if item is not None
+        }
+        if len(configured_paths) != 1:
+            raise ConfigurationError(
+                "analysis, review, and runtime discovery must use the same portal job database"
+            )
+        jobs_path = configured_paths.pop()
         store = JobStore(jobs_path)
     except (ConfigurationError, JobStoreError) as exc:
         print(f"worker startup failed: {exc}", file=sys.stderr)
@@ -379,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             processed = process_next(config, store)
             if not processed:
+                processed = process_next_runtime(config, store)
+            if not processed:
                 processed = process_next_review(config, store)
         except (WorkerError, JobStoreError) as exc:
             print(f"worker failed: {exc}", file=sys.stderr)
@@ -386,11 +555,16 @@ def main(argv: list[str] | None = None) -> int:
         if options.once:
             return 0
         if not processed:
-            poll_seconds = (
-                config.analysis.poll_seconds
-                if config.analysis is not None
-                else config.review.poll_seconds  # type: ignore[union-attr]
+            enabled = next(
+                item
+                for item in (
+                    config.analysis,
+                    config.runtime_discovery,
+                    config.review,
+                )
+                if item is not None
             )
+            poll_seconds = enabled.poll_seconds
             time.sleep(poll_seconds)
 
 

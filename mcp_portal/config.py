@@ -49,6 +49,19 @@ class ReviewConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeDiscoveryConfig:
+    jobs_database_path: Path
+    runner_path: Path
+    guard_binary: Path
+    evidence_root: Path
+    writer_lock_path: Path
+    runtime_image: str = "node:22-bookworm-slim"
+    timeout_seconds: int = 240
+    maximum_output_bytes: int = 65536
+    poll_seconds: int = 2
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     database_path: Path
     host: str = "127.0.0.1"
@@ -57,6 +70,7 @@ class Config:
     analysis: AnalysisConfig | None = None
     evidence: EvidenceConfig | None = None
     review: ReviewConfig | None = None
+    runtime_discovery: RuntimeDiscoveryConfig | None = None
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -72,17 +86,19 @@ class Config:
         analysis = None
         evidence = None
         review = None
+        runtime_discovery = None
         local_features_enabled = any(
             _enabled(name)
             for name in (
                 "MCP_PORTAL_ENABLE_ANALYSIS",
                 "MCP_PORTAL_ENABLE_EVIDENCE_VIEW",
                 "MCP_PORTAL_ENABLE_REVIEW",
+                "MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY",
             )
         )
         if local_features_enabled and host not in {"127.0.0.1", "localhost", "::1"}:
             raise ConfigurationError(
-                "analysis, evidence viewing, and review are restricted to a loopback portal"
+                "analysis, evidence viewing, review, and runtime discovery are restricted to a loopback portal"
             )
         if _enabled("MCP_PORTAL_ENABLE_ANALYSIS"):
             if host not in {"127.0.0.1", "localhost", "::1"}:
@@ -196,6 +212,56 @@ class Config:
                     "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
                 ),
             )
+        if _enabled("MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY"):
+            jobs_database_path = _writable_database_path(
+                "MCP_PORTAL_JOBS_DATABASE"
+            )
+            runner_path = _existing_file(
+                "MCP_PORTAL_RUNTIME_DISCOVERY_RUNNER", required=True
+            )
+            guard_binary = _existing_file(
+                "MCP_PORTAL_NATIVE_GUARD_BINARY", required=True
+            )
+            evidence_root = _directory_path("MCP_PORTAL_EVIDENCE_ROOT")
+            assert runner_path is not None and guard_binary is not None
+            if not os.access(guard_binary, os.X_OK):
+                raise ConfigurationError(
+                    "MCP_PORTAL_NATIVE_GUARD_BINARY is not executable: "
+                    f"{guard_binary}"
+                )
+            runtime_image = os.environ.get(
+                "MCP_PORTAL_RUNTIME_IMAGE", "node:22-bookworm-slim"
+            ).strip()
+            if not runtime_image or len(runtime_image.encode("utf-8")) > 200:
+                raise ConfigurationError(
+                    "MCP_PORTAL_RUNTIME_IMAGE must contain 1 to 200 UTF-8 bytes"
+                )
+            runtime_discovery = RuntimeDiscoveryConfig(
+                jobs_database_path=jobs_database_path,
+                runner_path=runner_path,
+                guard_binary=guard_binary,
+                evidence_root=evidence_root,
+                writer_lock_path=_writable_path(
+                    "MCP_PORTAL_OBSERVATORY_WRITER_LOCK",
+                    default=jobs_database_path.parent / "observatory-writer.lock",
+                ),
+                runtime_image=runtime_image,
+                timeout_seconds=_bounded_integer(
+                    "MCP_PORTAL_RUNTIME_TIMEOUT_SECONDS",
+                    240,
+                    minimum=30,
+                    maximum=1800,
+                ),
+                maximum_output_bytes=_bounded_integer(
+                    "MCP_PORTAL_MAXIMUM_OUTPUT_BYTES",
+                    65536,
+                    minimum=4096,
+                    maximum=1048576,
+                ),
+                poll_seconds=_bounded_integer(
+                    "MCP_PORTAL_WORKER_POLL_SECONDS", 2, minimum=1, maximum=60
+                ),
+            )
 
         return cls(
             database_path=database_path,
@@ -205,6 +271,7 @@ class Config:
             analysis=analysis,
             evidence=evidence,
             review=review,
+            runtime_discovery=runtime_discovery,
         )
 
 

@@ -16,13 +16,19 @@ from mcp_portal.config import (
     Config,
     EvidenceConfig,
     ReviewConfig,
+    RuntimeDiscoveryConfig,
 )
 from fixture_catalog import create_fixture
 
 
 class HttpTests(unittest.TestCase):
     def _start(
-        self, analysis: bool, *, evidence: bool = False, review: bool = False
+        self,
+        analysis: bool,
+        *,
+        evidence: bool = False,
+        review: bool = False,
+        runtime: bool = False,
     ) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
@@ -57,6 +63,7 @@ class HttpTests(unittest.TestCase):
         analysis_config = None
         evidence_config = None
         review_config = None
+        runtime_config = None
         if analysis:
             rules = root / "rules.json"
             rules.write_text("{}", encoding="utf-8")
@@ -73,6 +80,21 @@ class HttpTests(unittest.TestCase):
             review_config = ReviewConfig(
                 root / "jobs.sqlite", binary, "http-test-reviewer"
             )
+        if runtime:
+            runner = root / "runtime-runner.py"
+            runner.write_text("print('{}')\n", encoding="utf-8")
+            guard = root / "guard"
+            guard.write_text("guard", encoding="utf-8")
+            guard.chmod(0o755)
+            evidence_root = root / "evidence"
+            evidence_root.mkdir(exist_ok=True)
+            runtime_config = RuntimeDiscoveryConfig(
+                root / "jobs.sqlite",
+                runner,
+                guard,
+                evidence_root,
+                root / "writer.lock",
+            )
         config = Config(
             database_path=database,
             host="127.0.0.1",
@@ -81,6 +103,7 @@ class HttpTests(unittest.TestCase):
             analysis=analysis_config,
             evidence=evidence_config,
             review=review_config,
+            runtime_discovery=runtime_config,
         )
         self.server = create_server(config)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -264,6 +287,60 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(response.status, 303)
         self.assertEqual(response.getheader("Location"), "/jobs/1")
         self.assertEqual(self.server.jobs.get(1)["status"], "queued")
+
+    def test_runtime_form_queues_job_with_csrf_and_same_origin(self) -> None:
+        self._start(False, runtime=True)
+        with urlopen(
+            self.base_url + "/servers/io.example%2Ffilesystem", timeout=2
+        ) as response:
+            body = response.read().decode("utf-8")
+        match = re.search(
+            r'action="/runtime-discovery-requests".*?'
+            r'name="csrf_token" value="([0-9a-f]+)"',
+            body,
+        )
+        self.assertIsNotNone(match)
+        payload = urlencode(
+            {
+                "server_version_id": "1",
+                "package_id": "10",
+                "csrf_token": match.group(1),
+            }
+        )
+        rejected = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=2
+        )
+        rejected.request(
+            "POST",
+            "/runtime-discovery-requests",
+            body=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": self.host_header,
+                "Sec-Fetch-Site": "cross-site",
+            },
+        )
+        response = rejected.getresponse()
+        response.read()
+        self.assertEqual(response.status, 400)
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=2
+        )
+        connection.request(
+            "POST",
+            "/runtime-discovery-requests",
+            body=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": self.host_header,
+                "Sec-Fetch-Site": "same-origin",
+            },
+        )
+        response = connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader("Location"), "/runtime-jobs/1")
+        self.assertEqual(self.server.jobs.get_runtime(1)["status"], "queued")
 
 
 if __name__ == "__main__":

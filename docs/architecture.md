@@ -15,16 +15,16 @@ Observatory catalog      portal-jobs.sqlite
                               |
                               | separate worker claims one job
                               v
-                    fixed mcp-observatory argv
+             fixed analysis or runtime argv
                               |
                               v
-                   Observatory static analyzer
+             Observatory analysis/runtime runner
                               |
-                              +--> authoritative analysis rows
+                              +--> authoritative analysis/observation rows
                               +--> immutable evidence directory
 ```
 
-`mcp-observatory` remains the sole owner of Registry and package-analysis data. The portal owns only request lifecycle state. `mcp-native-guard` remains the future runtime sensor.
+`mcp-observatory` remains the sole owner of Registry, package-analysis, and runtime-observation data. The portal owns only request lifecycle state. `mcp-native-guard` is the runtime sensor and does not own portal state.
 
 ## Analysis request contract
 
@@ -37,6 +37,11 @@ The browser never supplies package names, versions, URLs, paths, commands, or CL
 The portal resolves the pair from the read-only Observatory catalog, verifies that the package belongs to the server record, requires npm plus an exact declared version, and copies the resolved identity into the portal-owned queue. A partial unique index prevents a second queued or running job for the same pair.
 
 The worker re-resolves the IDs and compares the stored identity before execution. It then constructs a fixed argument vector for `mcp-observatory analyze package`. `shell=True`, arbitrary flags, and `--force` are not supported.
+
+Runtime discovery uses the same ID and CSRF contract, additionally requires an npm
+stdio package, and queues a separate job type. Runtime image, runner and guard paths,
+timeouts, commands, and flags are server-side configuration only. The worker verifies
+the resulting authoritative runtime row belongs to the requested IDs.
 
 ## Process model
 
@@ -66,9 +71,12 @@ A public or concurrent deployment should browse a consistently published SQLite 
 - `/servers/{identifier}` immutable versions, packages, and eligible analysis forms.
 - `/reports/ecosystems` package declarations grouped by Registry ecosystem.
 - `POST /analysis-requests` constrained queue submission when enabled.
+- `POST /runtime-discovery-requests` constrained runtime queue submission when enabled.
 - `/jobs` portal queue.
 - `/jobs/{id}` job status and bounded output.
 - `/analyses/{id}` authoritative Observatory analysis.
+- `/runtime-jobs/{id}` runtime-discovery job status and bounded output.
+- `/runtime-observations/{id}` authoritative observation and bounded tool definitions.
 - `/healthz` catalog schema check.
 - `/static/portal.css` fixed stylesheet.
 

@@ -34,6 +34,19 @@ class ReviewCandidate:
     expected_disposition: str
 
 
+RuntimeCandidate = AnalysisCandidate
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeObservationResult:
+    runtime_observation_run_id: int
+    artifact_sha256: str
+    launch_profile_sha256: str
+    inventory_sha256: str
+    guard_version: str
+    tool_count: int
+
+
 def resolve_candidate(
     database_path: Path, server_version_id: int, package_id: int
 ) -> AnalysisCandidate:
@@ -68,6 +81,72 @@ def resolve_candidate(
     if not row["package_version"]:
         raise AnalysisSelectionError("selected package has no exact declared version")
     return AnalysisCandidate(**dict(row))
+
+
+def resolve_runtime_candidate(
+    database_path: Path, server_version_id: int, package_id: int
+) -> RuntimeCandidate:
+    candidate = resolve_candidate(database_path, server_version_id, package_id)
+    if candidate.transport != "stdio":
+        raise AnalysisSelectionError(
+            "runtime discovery currently supports stdio packages only"
+        )
+    return candidate
+
+
+def resolve_runtime_result(
+    database_path: Path,
+    runtime_observation_run_id: int,
+    server_version_id: int,
+    package_id: int,
+) -> RuntimeObservationResult:
+    if runtime_observation_run_id <= 0:
+        raise AnalysisSelectionError("runtime observation identifier must be positive")
+    encoded = quote(database_path.resolve().as_posix(), safe="/")
+    uri = f"file:{encoded}?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=5.0)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            row = connection.execute(
+                """SELECT r.id AS runtime_observation_run_id,
+                          r.server_version_id,r.package_id,r.status,
+                          r.artifact_sha256,r.launch_profile_sha256,
+                          r.inventory_sha256,r.guard_version,
+                          (SELECT COUNT(*) FROM runtime_observation_tools t
+                           WHERE t.run_id=r.id) AS tool_count
+                   FROM runtime_observation_runs r WHERE r.id=?""",
+                (runtime_observation_run_id,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise AnalysisSelectionError(
+            f"cannot resolve runtime observation result: {exc}"
+        ) from exc
+    if row is None or row["status"] != "completed":
+        raise AnalysisSelectionError("runtime observation is not completed")
+    if (
+        int(row["server_version_id"]) != server_version_id
+        or int(row["package_id"]) != package_id
+    ):
+        raise AnalysisSelectionError(
+            "runtime observation belongs to a different catalog selection"
+        )
+    values = dict(row)
+    values.pop("server_version_id")
+    values.pop("package_id")
+    values.pop("status")
+    for name in (
+        "artifact_sha256",
+        "launch_profile_sha256",
+        "inventory_sha256",
+        "guard_version",
+    ):
+        if not isinstance(values[name], str) or not values[name]:
+            raise AnalysisSelectionError(
+                f"runtime observation has no valid {name}"
+            )
+    return RuntimeObservationResult(**values)
 
 
 def resolve_review_candidate(

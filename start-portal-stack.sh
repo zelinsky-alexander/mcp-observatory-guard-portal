@@ -7,6 +7,7 @@ umask 077
 
 PORTAL_ROOT="${PORTAL_ROOT:-/home/alex/source/mcp-observatory-guard-portal}"
 OBSERVATORY_ROOT="${OBSERVATORY_ROOT:-/home/alex/source/mcp-observatory}"
+NATIVE_GUARD_ROOT="${NATIVE_GUARD_ROOT:-/home/alex/source/mcp-native-guard}"
 
 RUNTIME_DIR="${MCP_PORTAL_RUNTIME_DIR:-$PORTAL_ROOT/runtime}"
 LOG_DIR="$RUNTIME_DIR/logs"
@@ -26,6 +27,7 @@ export MCP_PORTAL_PAGE_SIZE="${MCP_PORTAL_PAGE_SIZE:-50}"
 export MCP_PORTAL_ENABLE_ANALYSIS="${MCP_PORTAL_ENABLE_ANALYSIS:-1}"
 export MCP_PORTAL_ENABLE_EVIDENCE_VIEW="${MCP_PORTAL_ENABLE_EVIDENCE_VIEW:-1}"
 export MCP_PORTAL_ENABLE_REVIEW="${MCP_PORTAL_ENABLE_REVIEW:-1}"
+export MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY="${MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY:-1}"
 export MCP_PORTAL_REVIEWER="${MCP_PORTAL_REVIEWER:-${USER:-local-reviewer}}"
 export MCP_PORTAL_JOBS_DATABASE="${MCP_PORTAL_JOBS_DATABASE:-$RUNTIME_DIR/portal-jobs.sqlite}"
 export MCP_PORTAL_ANALYSIS_RULES="${MCP_PORTAL_ANALYSIS_RULES:-$OBSERVATORY_ROOT/rules/artifact-static-analysis-v1.json}"
@@ -36,6 +38,10 @@ export MCP_PORTAL_MAXIMUM_DOWNLOAD_BYTES="${MCP_PORTAL_MAXIMUM_DOWNLOAD_BYTES:-8
 export MCP_PORTAL_REVIEW_TIMEOUT_SECONDS="${MCP_PORTAL_REVIEW_TIMEOUT_SECONDS:-30}"
 export MCP_PORTAL_MAXIMUM_OUTPUT_BYTES="${MCP_PORTAL_MAXIMUM_OUTPUT_BYTES:-65536}"
 export MCP_PORTAL_WORKER_POLL_SECONDS="${MCP_PORTAL_WORKER_POLL_SECONDS:-2}"
+export MCP_PORTAL_RUNTIME_DISCOVERY_RUNNER="${MCP_PORTAL_RUNTIME_DISCOVERY_RUNNER:-$OBSERVATORY_ROOT/tools/runtime_discovery.py}"
+export MCP_PORTAL_NATIVE_GUARD_BINARY="${MCP_PORTAL_NATIVE_GUARD_BINARY:-$NATIVE_GUARD_ROOT/build/release/mcp-native-guard}"
+export MCP_PORTAL_RUNTIME_IMAGE="${MCP_PORTAL_RUNTIME_IMAGE:-node:22-bookworm-slim}"
+export MCP_PORTAL_RUNTIME_TIMEOUT_SECONDS="${MCP_PORTAL_RUNTIME_TIMEOUT_SECONDS:-240}"
 
 if [[ -z "${MCP_PORTAL_OBSERVATORY_BINARY:-}" ]]; then
     for candidate in \
@@ -96,6 +102,14 @@ require_executable() {
     [[ -n "$path" ]] || die "$label was not resolved"
     [[ -f "$path" ]] || die "$label does not exist: $path"
     [[ -x "$path" ]] || die "$label is not executable: $path"
+}
+
+feature_enabled() {
+    case "${1,,}" in
+        1|true|yes) return 0 ;;
+        0|false|no|"") return 1 ;;
+        *) die "feature flag must be one of 0, 1, false, true, no, or yes: $1" ;;
+    esac
 }
 
 port_is_listening() {
@@ -172,6 +186,10 @@ require_directory "Portal Python package" "$PORTAL_ROOT/mcp_portal"
 require_file "Observatory catalog" "$MCP_PORTAL_DATABASE"
 require_file "Static-analysis rules" "$MCP_PORTAL_ANALYSIS_RULES"
 require_executable "Observatory binary" "${MCP_PORTAL_OBSERVATORY_BINARY:-}"
+if feature_enabled "$MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY"; then
+    require_file "Runtime-discovery runner" "$MCP_PORTAL_RUNTIME_DISCOVERY_RUNNER"
+    require_executable "Native guard binary" "$MCP_PORTAL_NATIVE_GUARD_BINARY"
+fi
 
 mkdir -p "$RUNTIME_DIR" "$LOG_DIR" "$MCP_PORTAL_EVIDENCE_ROOT"
 require_directory "Evidence root" "$MCP_PORTAL_EVIDENCE_ROOT"
@@ -214,12 +232,19 @@ printf '  Portal URL:        http://%s:%s\n' "$MCP_PORTAL_HOST" "$MCP_PORTAL_POR
 printf '  Analysis enabled:  %s\n' "$MCP_PORTAL_ENABLE_ANALYSIS"
 printf '  Evidence enabled:  %s\n' "$MCP_PORTAL_ENABLE_EVIDENCE_VIEW"
 printf '  Review enabled:    %s\n' "$MCP_PORTAL_ENABLE_REVIEW"
+printf '  Runtime enabled:   %s\n' "$MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY"
 printf '  Reviewer:          %s\n' "$MCP_PORTAL_REVIEWER"
 printf '  Analysis timeout:  %s seconds\n' "$MCP_PORTAL_ANALYSIS_TIMEOUT_SECONDS"
 printf '  Evidence timeout:  %s seconds\n' "$MCP_PORTAL_EVIDENCE_TIMEOUT_SECONDS"
 printf '  Download limit:    %s bytes\n' "$MCP_PORTAL_MAXIMUM_DOWNLOAD_BYTES"
 printf '  Review timeout:    %s seconds\n' "$MCP_PORTAL_REVIEW_TIMEOUT_SECONDS"
 printf '  Worker poll:       %s seconds\n' "$MCP_PORTAL_WORKER_POLL_SECONDS"
+if feature_enabled "$MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY"; then
+    printf '  Runtime runner:    %s\n' "$MCP_PORTAL_RUNTIME_DISCOVERY_RUNNER"
+    printf '  Native guard:      %s\n' "$MCP_PORTAL_NATIVE_GUARD_BINARY"
+    printf '  Runtime image:     %s\n' "$MCP_PORTAL_RUNTIME_IMAGE"
+    printf '  Runtime timeout:   %s seconds per phase\n' "$MCP_PORTAL_RUNTIME_TIMEOUT_SECONDS"
+fi
 printf '\nLogs\n'
 printf '  Portal: %s\n' "$PORTAL_LOG"
 printf '  Worker: %s\n\n' "$WORKER_LOG"
