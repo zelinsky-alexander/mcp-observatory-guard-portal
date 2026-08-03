@@ -18,7 +18,7 @@ def layout(title: str, body: str, *, public_readonly: bool = False) -> str:
 <title>{safe_title} · {PORTAL_NAME}</title><link rel="stylesheet" href="/static/portal.css"></head>
 <body><header class="site-header"><div><a class="brand" href="/">MCP Observatory</a><span class="tagline">Evidence, provenance, and change over time</span></div>
 <nav aria-label="Primary navigation"><a href="/">Dashboard</a><a href="/servers">Servers</a><a href="/reports/ecosystems">Ecosystems</a>{local_jobs}<a href="/about">About</a><a href="/methodology">Methodology</a></nav></header>
-<aside class="independence-notice"><strong>Independent research:</strong> This portal is not affiliated with, endorsed by, or operated by Anthropic, the MCP project, package registries, or listed server publishers.</aside>
+<aside class="independence-notice"><strong>Independent security research project.</strong> Not affiliated with or endorsed by the Model Context Protocol project, the Official MCP Registry, package registries, or listed publishers.</aside>
 <main>{body}</main><footer><p>Results describe exact artifacts under documented analysis profiles. They do not prove safety or author intent.</p><nav aria-label="Research information"><a href="/about">About</a><a href="/methodology">Methodology</a><a href="/data-sources">Data Sources</a><a href="/disclaimer">Disclaimer</a><a href="/privacy">Privacy</a><a href="/corrections">Corrections</a></nav></footer></body></html>"""
 
 
@@ -301,14 +301,14 @@ INFORMATION_PAGES = {
     "/about": (
         "About",
         "Independent MCP ecosystem research",
-        "This portal publishes reproducible observations about exact registry records and package artifacts. It is an independent research project and is not affiliated with, endorsed by, or operated by Anthropic, the MCP project, package registries, or listed publishers.",
+        "This portal publishes reproducible observations about exact registry records and package artifacts. Independent security research project. Not affiliated with or endorsed by the Model Context Protocol project, the Official MCP Registry, package registries, or listed publishers.",
         "Records are presented to support inspection, comparison, and correction. A listing is not a recommendation, certification, accusation, or safety verdict.",
     ),
     "/methodology": (
         "Methodology",
         "How observations are produced",
         "Registry metadata is imported as immutable, content-addressed history. Static analysis evaluates an exact package artifact under the analyzer, ruleset, integrity, and network profile recorded with each run. Findings identify observable patterns and retain their confidence and review disposition.",
-        "The public portal does not execute servers, invoke MCP tools, run analysis, perform runtime discovery, or expose complete source and evidence files. Displayed excerpts are escaped and bounded to 2,048 characters from the catalog record.",
+        "The public portal does not execute servers, invoke MCP tools, run analysis, perform runtime discovery, or expose complete source and evidence files. A finding excerpt is displayed only when a dedicated public excerpt was explicitly approved during analysis or review; displayed excerpts are escaped and bounded to 2,048 characters.",
     ),
     "/data-sources": (
         "Data Sources",
@@ -423,6 +423,11 @@ def _finding_article(item: dict[str, Any]) -> str:
         )
     else:
         location = f"<code>{location}</code>"
+    if item.get("subject_sha256"):
+        location += (
+            " · SHA-256 "
+            f'<code>{escape(_text(item["subject_sha256"]))}</code>'
+        )
 
     reviews = "".join(
         f"<li>{escape(_text(review['reviewed_at']))} · "
@@ -448,11 +453,11 @@ def _finding_article(item: dict[str, Any]) -> str:
         review_form = f"""<form class="review-form" method="post" action="/review-requests"><input type="hidden" name="finding_id" value="{item['id']}"><input type="hidden" name="expected_disposition" value="{escape(_text(item['disposition']), quote=True)}"><input type="hidden" name="csrf_token" value="{escape(request['csrf_token'], quote=True)}"><label for="disposition-{item['id']}">Review disposition</label><select id="disposition-{item['id']}" name="disposition">{options}</select><button type="submit">Submit review</button></form>"""
 
     excerpt = ""
-    if item.get("evidence_excerpt"):
-        truncation = "\n… excerpt bounded" if item.get("evidence_truncated") else ""
+    if item.get("public_excerpt_eligible") == 1 and item.get("public_excerpt"):
+        truncation = "\n… excerpt bounded" if item.get("public_excerpt_truncated") else ""
         excerpt = (
-            '<details class="finding-excerpt"><summary>Bounded finding excerpt</summary>'
-            f'<pre>{escape(_text(item["evidence_excerpt"]))}{truncation}</pre></details>'
+            '<details class="finding-excerpt"><summary>Approved public excerpt</summary>'
+            f'<pre>{escape(_text(item["public_excerpt"]))}{truncation}</pre></details>'
         )
 
     return f"""<article id="finding-{item['id']}" class="finding severity-{escape(_text(item['severity']))}"><div class="finding-header"><span class="badge">{escape(_text(item['severity']))}</span><strong>{escape(_text(item['title']))}</strong></div><div class="meta">{escape(_text(item['rule_id']))} · {escape(_text(item['disposition']))} · confidence {escape(_text(item['confidence']))}</div><p>{location}</p><p>{escape(_text(item['explanation']))}</p>{excerpt}{history}{review_form}</article>"""

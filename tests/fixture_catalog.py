@@ -18,7 +18,7 @@ CREATE TABLE package_environment(package_id INTEGER NOT NULL, position INTEGER N
 CREATE TABLE remotes(id INTEGER PRIMARY KEY, server_version_id INTEGER NOT NULL, position INTEGER NOT NULL, url TEXT NOT NULL, scheme TEXT, host TEXT, port INTEGER, transport TEXT NOT NULL, UNIQUE(server_version_id, position));
 CREATE TABLE analysis_runs(id INTEGER PRIMARY KEY, server_version_id INTEGER NOT NULL, package_id INTEGER NOT NULL, analysis_type TEXT NOT NULL, status TEXT NOT NULL, analyzer_name TEXT NOT NULL, analyzer_version TEXT NOT NULL, ruleset_version TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT, artifact_sha256 TEXT, published_integrity TEXT, integrity_verified INTEGER, base_image_ref TEXT, base_image_digest TEXT, network_mode TEXT, container_read_only INTEGER, container_user TEXT, summary_json TEXT, error_stage TEXT, error_message TEXT);
 CREATE TABLE analysis_artifacts(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL UNIQUE, registry_type TEXT NOT NULL, package_identifier TEXT NOT NULL, package_version TEXT NOT NULL, source_url TEXT NOT NULL, local_relative_path TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, published_integrity TEXT NOT NULL, integrity_verified INTEGER NOT NULL, downloaded_at TEXT NOT NULL);
-CREATE TABLE analysis_findings(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, rule_id TEXT NOT NULL, category TEXT NOT NULL, severity TEXT NOT NULL, confidence TEXT NOT NULL, disposition TEXT NOT NULL, subject_path TEXT NOT NULL, line_number INTEGER, symbol TEXT, title TEXT NOT NULL, evidence TEXT, explanation TEXT NOT NULL);
+CREATE TABLE analysis_findings(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, rule_id TEXT NOT NULL, category TEXT NOT NULL, severity TEXT NOT NULL, confidence TEXT NOT NULL, disposition TEXT NOT NULL, subject_path TEXT NOT NULL, line_number INTEGER, symbol TEXT, title TEXT NOT NULL, evidence TEXT, public_excerpt TEXT, public_excerpt_eligible INTEGER NOT NULL DEFAULT 0 CHECK(public_excerpt_eligible IN (0, 1)), public_excerpt_reason TEXT, explanation TEXT NOT NULL);
 CREATE TABLE analysis_files(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, archive_path TEXT NOT NULL, file_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, executable INTEGER NOT NULL, native_binary INTEGER NOT NULL, generated INTEGER NOT NULL, minified INTEGER NOT NULL, UNIQUE(analysis_run_id, archive_path));
 CREATE TABLE analysis_dependencies(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, dependency_type TEXT NOT NULL, dependency_name TEXT NOT NULL, declared_version TEXT NOT NULL, resolved_version TEXT, direct INTEGER NOT NULL, development INTEGER NOT NULL);
 CREATE TABLE analysis_evidence(id INTEGER PRIMARY KEY, analysis_run_id INTEGER NOT NULL, evidence_type TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, byte_size INTEGER NOT NULL, media_type TEXT NOT NULL, UNIQUE(analysis_run_id, relative_path));
@@ -81,7 +81,18 @@ def create_fixture(path: Path) -> None:
             ("d" * 64, "sha256:fixture"),
         )
         connection.execute(
-            "INSERT INTO analysis_findings VALUES(1, 100, 'node-child-process', 'process-api', 'high', 'high', 'unreviewed', 'package/index.js', 12, 'spawn', 'Process execution API', 'spawn(', 'The package references a process execution API.')"
+            """INSERT INTO analysis_findings(
+                   id, analysis_run_id, rule_id, category, severity, confidence,
+                   disposition, subject_path, line_number, symbol, title,
+                   evidence, explanation)
+               VALUES(1, 100, 'node-child-process', 'process-api', 'high',
+                      'high', 'unreviewed', 'package/index.js', 12, 'spawn',
+                      'Process execution API', 'spawn(',
+                      'The package references a process execution API.')"""
+        )
+        connection.execute(
+            "INSERT INTO analysis_files VALUES(1, 100, 'package/index.js', 'javascript', 128, ?, 0, 0, 0, 0)",
+            ("f" * 64,),
         )
         connection.execute(
             "INSERT INTO analysis_evidence VALUES(1, 100, 'summary', 'analysis-summary.json', ?, 128, 'application/json')",

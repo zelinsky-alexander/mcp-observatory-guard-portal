@@ -4,9 +4,9 @@ A small research portal for the future **Open MCP and Agent Behavioral Assurance
 
 The portal browses the SQLite catalog, static-analysis records, and runtime observations produced by [`mcp-observatory`](https://github.com/zelinsky-alexander/mcp-observatory). Its optional local orchestration mode can queue static analysis or discovery-only runtime observation for an exact npm-backed server record. It does not implement either analyzer and never invokes MCP tools.
 
-This is independent research. The portal is not affiliated with, endorsed by,
-or operated by Anthropic, the MCP project, package registries, or listed server
-publishers.
+Independent security research project. Not affiliated with or endorsed by the
+Model Context Protocol project, the Official MCP Registry, package registries,
+or listed publishers.
 
 ## Current pages
 
@@ -37,8 +37,9 @@ In this mode the application does not open a jobs database and cannot submit
 analysis, runtime discovery, or reviews. It denies state-changing methods and
 does not expose local job pages, runtime observations, source/evidence views, or
 complete-file downloads. Public pages contain catalog findings, hashes, paths,
-provenance, history, manifests, and escaped finding excerpts bounded to 2,048
-characters.
+provenance, history, and manifests. Finding excerpts appear only when the
+catalog explicitly marks a dedicated public excerpt as eligible; approved
+excerpts are escaped and bounded to 2,048 characters.
 
 Any analysis, evidence-view, review, or runtime-discovery feature flag conflicts
 with `public-readonly` and aborts startup. Conversely, a non-loopback bind is

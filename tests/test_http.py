@@ -276,7 +276,11 @@ class HttpTests(unittest.TestCase):
         connection = sqlite3.connect(self.database_path)
         try:
             connection.execute(
-                "UPDATE analysis_findings SET evidence=? WHERE id=1",
+                """UPDATE analysis_findings
+                      SET evidence='private-token-value', public_excerpt=?,
+                          public_excerpt_eligible=1,
+                          public_excerpt_reason='approved by fixture review'
+                    WHERE id=1""",
                 ("<script>" + ("x" * 2200),),
             )
             connection.commit()
@@ -287,13 +291,15 @@ class HttpTests(unittest.TestCase):
         with urlopen(self.base_url + "/analyses/100", timeout=2) as response:
             body = response.read().decode("utf-8")
             self.assertEqual(response.status, 200)
-            self.assertIn("Bounded finding excerpt", body)
+            self.assertIn("Approved public excerpt", body)
             self.assertIn("&lt;script&gt;", body)
             self.assertNotIn("<script>", body)
+            self.assertNotIn("private-token-value", body)
             self.assertIn("excerpt bounded", body)
+            self.assertIn("f" * 64, body)
             self.assertNotIn("/findings/1/source", body)
             self.assertNotIn('action="/review-requests"', body)
-            self.assertIn("Independent research", body)
+            self.assertIn("Independent security research project", body)
             self.assertNotIn('href="/jobs"', body)
 
         for path, heading in (
@@ -350,6 +356,29 @@ class HttpTests(unittest.TestCase):
             connection.close()
         self.assertEqual(disposition, "unreviewed")
         self.assertEqual(review_count, 0)
+
+    def test_public_readonly_hides_ineligible_excerpt_and_evidence(self) -> None:
+        self._start(False, public_readonly=True)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """UPDATE analysis_findings
+                      SET evidence='private-token-value',
+                          public_excerpt='not-yet-approved',
+                          public_excerpt_eligible=0,
+                          public_excerpt_reason='awaiting review'
+                    WHERE id=1"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with urlopen(self.base_url + "/analyses/100", timeout=2) as response:
+            body = response.read().decode("utf-8")
+        self.assertNotIn("Approved public excerpt", body)
+        self.assertNotIn("private-token-value", body)
+        self.assertNotIn("not-yet-approved", body)
+        self.assertNotIn("awaiting review", body)
 
     def test_server_form_queues_job_with_csrf(self) -> None:
         self._start(True)

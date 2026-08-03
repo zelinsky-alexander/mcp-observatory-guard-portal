@@ -23,7 +23,8 @@ Public mode permits GET and HEAD browsing of:
 - imported snapshot and analysis history;
 - findings, dispositions, paths, hashes, evidence-manifest metadata, and
   provenance recorded in the catalog;
-- escaped finding evidence excerpts bounded to 2,048 characters; and
+- dedicated public finding excerpts explicitly marked eligible during analysis
+  or review, escaped and bounded to 2,048 characters; and
 - the About, Methodology, Data Sources, Disclaimer, Privacy, and Corrections
   pages.
 
@@ -32,6 +33,13 @@ POST, PUT, PATCH, and DELETE, and makes local job pages, runtime observations,
 finding source views, and complete source downloads unavailable. Analysis,
 evidence viewing, review, or runtime-discovery feature flags conflict with this
 mode and abort startup.
+
+The public-excerpt catalog contract consists of `public_excerpt`,
+`public_excerpt_eligible`, and `public_excerpt_reason` on `analysis_findings`.
+The portal displays the bounded `public_excerpt` only when eligibility is
+exactly `1`. If any contract column is absent, or eligibility is not approved,
+the portal fails closed and displays no excerpt. It never derives an excerpt or
+eligibility from the private `evidence` field.
 
 The Observatory database is still opened with SQLite `mode=ro` and
 `PRAGMA query_only=ON`. Publish a dedicated catalog copy owned by the data

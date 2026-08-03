@@ -82,7 +82,55 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNotNone(detail)
         assert detail is not None
         self.assertEqual(detail["findings"][0]["severity"], "high")
+        self.assertEqual(detail["findings"][0]["public_excerpt"], "")
+        self.assertEqual(detail["findings"][0]["public_excerpt_eligible"], 0)
+        self.assertEqual(detail["findings"][0]["subject_sha256"], "f" * 64)
         self.assertEqual(detail["evidence_files"][0]["relative_path"], "analysis-summary.json")
+
+    def test_analysis_detail_uses_only_explicitly_eligible_public_excerpt(self) -> None:
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            """UPDATE analysis_findings
+                  SET evidence='private evidence', public_excerpt='approved context',
+                      public_excerpt_eligible=0,
+                      public_excerpt_reason='awaiting legal review'
+                WHERE id=1"""
+        )
+        connection.commit()
+        connection.close()
+        finding = self.catalog.analysis_detail(100)["findings"][0]
+        self.assertEqual(finding["public_excerpt"], "")
+        self.assertEqual(finding["public_excerpt_eligible"], 0)
+        self.assertNotIn("private evidence", finding.values())
+
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE analysis_findings SET public_excerpt_eligible=1 WHERE id=1"
+        )
+        connection.commit()
+        connection.close()
+        finding = self.catalog.analysis_detail(100)["findings"][0]
+        self.assertEqual(finding["public_excerpt"], "approved context")
+        self.assertEqual(finding["public_excerpt_eligible"], 1)
+
+    def test_analysis_detail_fails_closed_without_complete_excerpt_contract(self) -> None:
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            """UPDATE analysis_findings
+                  SET public_excerpt='must remain private',
+                      public_excerpt_eligible=1
+                WHERE id=1"""
+        )
+        connection.execute(
+            "ALTER TABLE analysis_findings DROP COLUMN public_excerpt_reason"
+        )
+        connection.commit()
+        connection.close()
+
+        finding = self.catalog.analysis_detail(100)["findings"][0]
+        self.assertEqual(finding["public_excerpt"], "")
+        self.assertEqual(finding["public_excerpt_eligible"], 0)
+        self.assertNotIn("must remain private", finding.values())
 
     def test_analysis_detail_includes_review_history(self) -> None:
         connection = sqlite3.connect(self.database)
