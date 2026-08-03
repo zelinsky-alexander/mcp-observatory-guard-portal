@@ -29,6 +29,7 @@ from .views import (
     job_detail_page,
     jobs_page,
     finding_source_page,
+    information_page,
     review_job_detail_page,
     runtime_job_detail_page,
     runtime_observation_page,
@@ -111,6 +112,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         self._dispatch(include_body=False)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.server.config.public_readonly:
+            self._reject_state_change()
+            return
         target = urlsplit(self.path)
         if (
             target.path == "/analysis-requests"
@@ -136,6 +140,28 @@ class PortalHandler(BaseHTTPRequestHandler):
         self._send_html(
             HTTPStatus.METHOD_NOT_ALLOWED,
             error_page(405, "Method not allowed", "This endpoint is not enabled."),
+            include_body=True,
+            extra_headers={"Allow": "GET, HEAD"},
+        )
+
+    def do_PUT(self) -> None:  # noqa: N802
+        self._reject_state_change()
+
+    def do_PATCH(self) -> None:  # noqa: N802
+        self._reject_state_change()
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        self._reject_state_change()
+
+    def _reject_state_change(self) -> None:
+        self._send_html(
+            HTTPStatus.METHOD_NOT_ALLOWED,
+            error_page(
+                405,
+                "Method not allowed",
+                "State-changing requests are disabled.",
+                public_readonly=self.server.config.public_readonly,
+            ),
             include_body=True,
             extra_headers={"Allow": "GET, HEAD"},
         )
@@ -260,14 +286,31 @@ class PortalHandler(BaseHTTPRequestHandler):
                 if self.server.jobs is not None:
                     data["portal_jobs"] = self.server.jobs.summary()
                 self._send_html(
-                    HTTPStatus.OK, dashboard_page(data), include_body=include_body
+                    HTTPStatus.OK,
+                    dashboard_page(
+                        data,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
+                    include_body=include_body,
+                )
+                return
+            information = information_page(
+                target.path,
+                public_readonly=self.server.config.public_readonly,
+            )
+            if information is not None:
+                self._send_html(
+                    HTTPStatus.OK, information, include_body=include_body
                 )
                 return
             if target.path == "/reports/ecosystems":
                 rows = self.server.catalog.ecosystem_summary()
                 self._send_html(
                     HTTPStatus.OK,
-                    ecosystem_report_page(rows),
+                    ecosystem_report_page(
+                        rows,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
                     include_body=include_body,
                 )
                 return
@@ -279,7 +322,10 @@ class PortalHandler(BaseHTTPRequestHandler):
                 )
                 self._send_html(
                     HTTPStatus.OK,
-                    unreviewed_findings_page(result),
+                    unreviewed_findings_page(
+                        result,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
                     include_body=include_body,
                 )
                 return
@@ -348,7 +394,12 @@ class PortalHandler(BaseHTTPRequestHandler):
                     ecosystem=ecosystem,
                 )
                 self._send_html(
-                    HTTPStatus.OK, servers_page(result), include_body=include_body
+                    HTTPStatus.OK,
+                    servers_page(
+                        result,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
+                    include_body=include_body,
                 )
                 return
             if target.path.startswith("/servers/"):
@@ -360,7 +411,10 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._decorate_analysis_actions(detail)
                 self._send_html(
                     HTTPStatus.OK,
-                    server_detail_page(detail),
+                    server_detail_page(
+                        detail,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
                     include_body=include_body,
                 )
                 return
@@ -375,7 +429,10 @@ class PortalHandler(BaseHTTPRequestHandler):
                 self._decorate_finding_actions(detail)
                 self._send_html(
                     HTTPStatus.OK,
-                    analysis_detail_page(detail),
+                    analysis_detail_page(
+                        detail,
+                        public_readonly=self.server.config.public_readonly,
+                    ),
                     include_body=include_body,
                 )
                 return
@@ -420,6 +477,9 @@ class PortalHandler(BaseHTTPRequestHandler):
                 )
                 return
             if target.path.startswith("/runtime-observations/"):
+                if self.server.config.public_readonly:
+                    self._not_found(include_body)
+                    return
                 run_id = _positive_integer(
                     target.path[len("/runtime-observations/") :], fallback=0
                 )
@@ -434,13 +494,16 @@ class PortalHandler(BaseHTTPRequestHandler):
                 )
                 return
             if target.path == "/jobs":
+                if self.server.config.public_readonly:
+                    self._not_found(include_body)
+                    return
                 summary = None if self.server.jobs is None else self.server.jobs.summary()
                 self._send_html(
                     HTTPStatus.OK, jobs_page(summary), include_body=include_body
                 )
                 return
             if target.path.startswith("/jobs/"):
-                if self.server.jobs is None:
+                if self.server.config.public_readonly or self.server.jobs is None:
                     self._not_found(include_body)
                     return
                 job_id = _positive_integer(target.path[len("/jobs/") :], fallback=0)
@@ -475,13 +538,23 @@ class PortalHandler(BaseHTTPRequestHandler):
         except (CatalogError, JobStoreError) as exc:
             self._send_html(
                 HTTPStatus.SERVICE_UNAVAILABLE,
-                error_page(503, "Portal data unavailable", str(exc)),
+                error_page(
+                    503,
+                    "Portal data unavailable",
+                    str(exc),
+                    public_readonly=self.server.config.public_readonly,
+                ),
                 include_body=include_body,
             )
         except (EvidenceError, OSError, ValueError) as exc:
             self._send_html(
                 HTTPStatus.BAD_REQUEST,
-                error_page(400, "Invalid request", str(exc)),
+                error_page(
+                    400,
+                    "Invalid request",
+                    str(exc),
+                    public_readonly=self.server.config.public_readonly,
+                ),
                 include_body=include_body,
             )
 
@@ -584,7 +657,12 @@ class PortalHandler(BaseHTTPRequestHandler):
     def _not_found(self, include_body: bool) -> None:
         self._send_html(
             HTTPStatus.NOT_FOUND,
-            error_page(404, "Not found", "The requested portal resource does not exist."),
+            error_page(
+                404,
+                "Not found",
+                "The requested portal resource does not exist.",
+                public_readonly=self.server.config.public_readonly,
+            ),
             include_body=include_body,
         )
 
@@ -661,7 +739,9 @@ def main() -> int:
         )
         if enabled
     ]
-    mode = ",".join(modes) if modes else "read-only"
+    mode = config.mode if config.public_readonly else (
+        ",".join(modes) if modes else "local-read-only"
+    )
     print(
         f"MCP assurance portal listening on http://{config.host}:{server.server_port} "
         f"using catalog {config.database_path} mode={mode}",

@@ -1,6 +1,8 @@
 # Public deployment hardening
 
-This branch starts the transition from loopback-only testing to a Cloudflare Tunnel plus AWS Lightsail deployment while preserving local WSL operation.
+Public deployment uses the explicit, fail-closed `public-readonly` mode while
+preserving local WSL operation. See [`public-readonly.md`](public-readonly.md)
+for the application boundary and hardened systemd and Nginx examples.
 
 ## Implemented in this slice
 
@@ -8,6 +10,9 @@ This branch starts the transition from loopback-only testing to a Cloudflare Tun
 - A fixed-argument `scripts/observatory-locked` wrapper so refresh and analysis can share one advisory writer lock.
 - SQLite-native, integrity-checked backups with a configurable target and atomic publication.
 - A health command covering `/healthz`, catalog availability, stale analysis jobs, and free disk space.
+- A public mode that never opens the portal jobs database, rejects state changes,
+  and disables source/evidence, review, runtime, and orchestration routes.
+- Hardened example systemd and Nginx configurations under `deploy/`.
 
 ## WSL backup target on Windows
 
@@ -81,13 +86,12 @@ Production should use separate operating-system identities:
 
 Do not add the public portal identity to the Docker group. Docker socket access is effectively host-root access.
 
-## Still to implement on this branch
+## Additional hardening work for any future authenticated orchestration deployment
 
 - Enforce the configured queue maximum and per-client request window in `JobStore.enqueue`.
 - Record a normalized client key without retaining unnecessary raw address data.
 - Add lease owner, lease expiry, heartbeat, and attempt columns with schema migration and expired-job recovery.
 - Add portal responses for quota exhaustion (`429`) and queue saturation (`503`).
-- Add systemd unit templates with hardening directives and failure hooks.
 - Add tests for quota boundaries, crash recovery, lock serialization, backup restoration, and proxy-header trust.
 
 The configuration fields are added first so subsequent queue and worker changes have a stable explicit contract.

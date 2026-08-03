@@ -558,7 +558,10 @@ class Catalog:
                 connection.execute(
                     """
                     SELECT id, rule_id, category, severity, confidence, disposition,
-                           subject_path, line_number, symbol, title, evidence, explanation
+                           subject_path, line_number, symbol, title,
+                           substr(COALESCE(evidence, ''), 1, 2048) AS evidence_excerpt,
+                           length(COALESCE(evidence, '')) > 2048 AS evidence_truncated,
+                           explanation
                     FROM analysis_findings WHERE analysis_run_id=?
                     ORDER BY CASE severity
                                  WHEN 'critical' THEN 0 WHEN 'high' THEN 1
