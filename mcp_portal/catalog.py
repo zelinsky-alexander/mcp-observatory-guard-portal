@@ -554,12 +554,48 @@ class Catalog:
             )
             if run is None:
                 return None
+            finding_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(analysis_findings)")
+            }
+            public_excerpt_columns = {
+                "public_excerpt",
+                "public_excerpt_eligible",
+                "public_excerpt_reason",
+            }
+            if public_excerpt_columns.issubset(finding_columns):
+                public_excerpt_projection = """
+                    CASE WHEN af.public_excerpt_eligible = 1
+                         THEN substr(COALESCE(af.public_excerpt, ''), 1, 2048)
+                         ELSE '' END AS public_excerpt,
+                    CASE WHEN af.public_excerpt_eligible = 1
+                         THEN length(COALESCE(af.public_excerpt, '')) > 2048
+                         ELSE 0 END AS public_excerpt_truncated,
+                    af.public_excerpt_eligible,
+                    substr(COALESCE(af.public_excerpt_reason, ''), 1, 512)
+                        AS public_excerpt_reason,
+                """
+            else:
+                public_excerpt_projection = """
+                    '' AS public_excerpt,
+                    0 AS public_excerpt_truncated,
+                    0 AS public_excerpt_eligible,
+                    NULL AS public_excerpt_reason,
+                """
             run["findings"] = _rows_to_dicts(
                 connection.execute(
-                    """
-                    SELECT id, rule_id, category, severity, confidence, disposition,
-                           subject_path, line_number, symbol, title, evidence, explanation
-                    FROM analysis_findings WHERE analysis_run_id=?
+                    f"""
+                    SELECT af.id, af.rule_id, af.category, af.severity,
+                           af.confidence, af.disposition, af.subject_path,
+                           af.line_number, af.symbol, af.title,
+                           {public_excerpt_projection}
+                           (SELECT files.sha256
+                              FROM analysis_files AS files
+                             WHERE files.analysis_run_id=af.analysis_run_id
+                               AND files.archive_path=af.subject_path
+                             LIMIT 1) AS subject_sha256,
+                           af.explanation
+                    FROM analysis_findings AS af WHERE af.analysis_run_id=?
                     ORDER BY CASE severity
                                  WHEN 'critical' THEN 0 WHEN 'high' THEN 1
                                  WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,

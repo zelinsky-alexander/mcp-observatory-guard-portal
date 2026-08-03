@@ -67,10 +67,42 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8080
     page_size: int = 50
+    mode: str = "local"
     analysis: AnalysisConfig | None = None
     evidence: EvidenceConfig | None = None
     review: ReviewConfig | None = None
     runtime_discovery: RuntimeDiscoveryConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"local", "public-readonly"}:
+            raise ConfigurationError(
+                "mode must be either local or public-readonly"
+            )
+        if self.mode != "public-readonly" and self.host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            raise ConfigurationError(
+                "non-loopback binding requires public-readonly mode"
+            )
+        if self.mode == "public-readonly" and any(
+            feature is not None
+            for feature in (
+                self.analysis,
+                self.evidence,
+                self.review,
+                self.runtime_discovery,
+            )
+        ):
+            raise ConfigurationError(
+                "public-readonly mode conflicts with analysis, evidence viewing, "
+                "review, and runtime discovery"
+            )
+
+    @property
+    def public_readonly(self) -> bool:
+        return self.mode == "public-readonly"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -83,6 +115,11 @@ class Config:
 
         port = _bounded_integer("MCP_PORTAL_PORT", 8080, minimum=1, maximum=65535)
         page_size = _bounded_integer("MCP_PORTAL_PAGE_SIZE", 50, minimum=1, maximum=100)
+        mode = os.environ.get("MCP_PORTAL_MODE", "local").strip().lower()
+        if mode not in {"local", "public-readonly"}:
+            raise ConfigurationError(
+                "MCP_PORTAL_MODE must be either local or public-readonly"
+            )
         analysis = None
         evidence = None
         review = None
@@ -96,6 +133,19 @@ class Config:
                 "MCP_PORTAL_ENABLE_RUNTIME_DISCOVERY",
             )
         )
+        if mode == "public-readonly" and local_features_enabled:
+            raise ConfigurationError(
+                "MCP_PORTAL_MODE=public-readonly conflicts with analysis, "
+                "evidence viewing, review, and runtime discovery"
+            )
+        if mode != "public-readonly" and host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            raise ConfigurationError(
+                "non-loopback binding requires MCP_PORTAL_MODE=public-readonly"
+            )
         if local_features_enabled and host not in {"127.0.0.1", "localhost", "::1"}:
             raise ConfigurationError(
                 "analysis, evidence viewing, review, and runtime discovery are restricted to a loopback portal"
@@ -268,6 +318,7 @@ class Config:
             host=host,
             port=port,
             page_size=page_size,
+            mode=mode,
             analysis=analysis,
             evidence=evidence,
             review=review,

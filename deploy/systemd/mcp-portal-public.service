@@ -1,0 +1,53 @@
+[Unit]
+Description=MCP Observatory public read-only portal
+Documentation=https://github.com/zelinsky-alexander/mcp-observatory-guard-portal
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=mcp-portal
+Group=mcp-portal
+WorkingDirectory=/opt/mcp-observatory-guard-portal
+Environment=MCP_PORTAL_HOST=127.0.0.1
+Environment=MCP_PORTAL_PORT=8080
+EnvironmentFile=/etc/mcp-portal/public-readonly.env
+# Pin the safety mode in the executable vector so EnvironmentFile cannot
+# accidentally override it.
+ExecStart=/usr/bin/env MCP_PORTAL_MODE=public-readonly /usr/bin/python3 -m mcp_portal
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+UMask=0077
+
+# The public process needs only its code and the published catalog. It must not
+# receive portal queue, evidence-root, analyzer, container, or writer access.
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadOnlyPaths=/opt/mcp-observatory-guard-portal
+ReadOnlyPaths=/srv/mcp-portal-public/catalog.sqlite
+InaccessiblePaths=-/var/lib/mcp-observatory
+InaccessiblePaths=-/var/lib/mcp-portal
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@chown @keyring @memlock @module @mount @obsolete @privileged @raw-io @reboot @resources @setuid @swap
+
+[Install]
+WantedBy=multi-user.target

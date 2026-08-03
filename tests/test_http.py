@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import http.client
+import hashlib
 import re
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -29,10 +31,12 @@ class HttpTests(unittest.TestCase):
         evidence: bool = False,
         review: bool = False,
         runtime: bool = False,
+        public_readonly: bool = False,
     ) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         root = Path(self.temporary.name)
         database = root / "catalog.sqlite"
+        self.database_path = database
         create_fixture(database)
         config = Config(database_path=database, host="127.0.0.1", port=0, page_size=20)
         if analysis or evidence or review:
@@ -100,6 +104,7 @@ class HttpTests(unittest.TestCase):
             host="127.0.0.1",
             port=0,
             page_size=20,
+            mode="public-readonly" if public_readonly else "local",
             analysis=analysis_config,
             evidence=evidence_config,
             review=review_config,
@@ -110,6 +115,16 @@ class HttpTests(unittest.TestCase):
         self.thread.start()
         self.host_header = f"127.0.0.1:{self.server.server_port}"
         self.base_url = "http://" + self.host_header
+
+    def _request_status(self, method: str, path: str, body: bytes = b"") -> int:
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=2
+        )
+        connection.request(method, path, body=body)
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        return response.status
 
     def tearDown(self) -> None:
         if hasattr(self, "server"):
@@ -255,6 +270,115 @@ class HttpTests(unittest.TestCase):
             urlopen(request, timeout=2)
         self.assertEqual(captured.exception.code, 405)
         self.assertEqual(captured.exception.headers["Allow"], "GET, HEAD")
+
+    def test_public_readonly_mode_exposes_only_bounded_public_records(self) -> None:
+        self._start(False, public_readonly=True)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """UPDATE analysis_findings
+                      SET evidence='private-token-value', public_excerpt=?,
+                          public_excerpt_eligible=1,
+                          public_excerpt_reason='approved by fixture review'
+                    WHERE id=1""",
+                ("<script>" + ("x" * 2200),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        catalog_before = hashlib.sha256(self.database_path.read_bytes()).digest()
+
+        with urlopen(self.base_url + "/analyses/100", timeout=2) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertIn("Approved public excerpt", body)
+            self.assertIn("&lt;script&gt;", body)
+            self.assertNotIn("<script>", body)
+            self.assertNotIn("private-token-value", body)
+            self.assertIn("excerpt bounded", body)
+            self.assertIn("f" * 64, body)
+            self.assertNotIn("/findings/1/source", body)
+            self.assertNotIn('action="/review-requests"', body)
+            self.assertIn("Independent security research project", body)
+            self.assertNotIn('href="/jobs"', body)
+
+        for path, heading in (
+            ("/about", "About"),
+            ("/methodology", "Methodology"),
+            ("/data-sources", "Data Sources"),
+            ("/disclaimer", "Disclaimer"),
+            ("/privacy", "Privacy"),
+            ("/corrections", "Corrections"),
+        ):
+            with self.subTest(path=path):
+                with urlopen(self.base_url + path, timeout=2) as response:
+                    page = response.read().decode("utf-8")
+                    self.assertEqual(response.status, 200)
+                    self.assertIn(f"<h1>{heading}</h1>", page)
+
+        for path in (
+            "/findings/1/source",
+            "/findings/1/source/download",
+            "/runtime-observations/1",
+            "/jobs",
+            "/jobs/1",
+            "/review-jobs/1",
+            "/runtime-jobs/1",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self._request_status("GET", path), 404)
+
+        for method, path in (
+            ("POST", "/analysis-requests"),
+            ("POST", "/review-requests"),
+            ("POST", "/runtime-discovery-requests"),
+            ("PUT", "/analyses/100"),
+            ("PATCH", "/analyses/100"),
+            ("DELETE", "/analyses/100"),
+        ):
+            with self.subTest(method=method, path=path):
+                self.assertEqual(self._request_status(method, path), 405)
+
+        self.assertIsNone(self.server.jobs)
+        self.assertEqual(
+            hashlib.sha256(self.database_path.read_bytes()).digest(),
+            catalog_before,
+        )
+        connection = sqlite3.connect(self.database_path)
+        try:
+            disposition = connection.execute(
+                "SELECT disposition FROM analysis_findings WHERE id=1"
+            ).fetchone()[0]
+            review_count = connection.execute(
+                "SELECT COUNT(*) FROM analysis_finding_reviews"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(disposition, "unreviewed")
+        self.assertEqual(review_count, 0)
+
+    def test_public_readonly_hides_ineligible_excerpt_and_evidence(self) -> None:
+        self._start(False, public_readonly=True)
+        connection = sqlite3.connect(self.database_path)
+        try:
+            connection.execute(
+                """UPDATE analysis_findings
+                      SET evidence='private-token-value',
+                          public_excerpt='not-yet-approved',
+                          public_excerpt_eligible=0,
+                          public_excerpt_reason='awaiting review'
+                    WHERE id=1"""
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        with urlopen(self.base_url + "/analyses/100", timeout=2) as response:
+            body = response.read().decode("utf-8")
+        self.assertNotIn("Approved public excerpt", body)
+        self.assertNotIn("private-token-value", body)
+        self.assertNotIn("not-yet-approved", body)
+        self.assertNotIn("awaiting review", body)
 
     def test_server_form_queues_job_with_csrf(self) -> None:
         self._start(True)
