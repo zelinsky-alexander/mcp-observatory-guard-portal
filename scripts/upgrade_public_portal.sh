@@ -53,7 +53,7 @@ maintenance_pid=""
 switched=0
 upgrade_complete=0
 
-log() { printf '%s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
+log() { printf '%s %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*" >&2; }
 fail() { log "ERROR: $*"; exit 1; }
 require_root() { [[ ${EUID} -eq 0 ]] || fail "run as root: sudo bash $0"; }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"; }
@@ -233,7 +233,7 @@ cleanup() {
 
 prune_releases() {
     local root=$1
-    local current previous path kept=0
+    local current path kept=0
     [[ "${KEEP_RELEASES}" =~ ^[1-9][0-9]*$ ]] || return 0
     current=$(readlink -f "${root}/current" 2>/dev/null || true)
 
