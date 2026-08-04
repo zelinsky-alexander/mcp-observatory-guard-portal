@@ -233,13 +233,14 @@ cleanup() {
 
 prune_releases() {
     local root=$1
+    local previous=$2
     local current path kept=0
     [[ "${KEEP_RELEASES}" =~ ^[1-9][0-9]*$ ]] || return 0
     current=$(readlink -f "${root}/current" 2>/dev/null || true)
 
     while IFS= read -r path; do
         [[ -n "${path}" ]] || continue
-        [[ "${path}" == "${current}" ]] && continue
+        [[ "${path}" == "${current}" || "${path}" == "${previous}" ]] && continue
         kept=$((kept + 1))
         if (( kept >= KEEP_RELEASES )); then
             log "removing old release ${path}"
@@ -297,9 +298,9 @@ main() {
     log "portal: $(readlink -f "${PORTAL_ROOT}/current")"
 
     systemctl --no-pager --full status "${PORTAL_SERVICE}" || true
-    prune_releases "${OBSERVATORY_ROOT}"
-    prune_releases "${NATIVE_GUARD_ROOT}"
-    prune_releases "${PORTAL_ROOT}"
+    prune_releases "${OBSERVATORY_ROOT}" "${old_observatory}"
+    prune_releases "${NATIVE_GUARD_ROOT}" "${old_native_guard}"
+    prune_releases "${PORTAL_ROOT}" "${old_portal}"
 }
 
 main "$@"
