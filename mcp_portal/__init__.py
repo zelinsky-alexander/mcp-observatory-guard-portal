@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import Any
 
 from .branding import apply_branding
+from .coverage_v2 import apply_coverage_v2
 from .public_ui import install_public_intelligence_ui
 
 __version__ = "0.1.0"
@@ -37,4 +38,5 @@ def _accept_integer_http_statuses() -> None:
 
 apply_branding()
 _accept_integer_http_statuses()
+apply_coverage_v2()
 install_public_intelligence_ui()
