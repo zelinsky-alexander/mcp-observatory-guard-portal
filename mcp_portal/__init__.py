@@ -3,6 +3,7 @@
 from http import HTTPStatus
 from typing import Any
 
+from .about_methodology import apply_about_methodology
 from .branding import apply_branding
 from .coverage_query_v2 import apply_coverage_query_v2
 from .coverage_v2 import apply_coverage_v2
@@ -43,4 +44,5 @@ _accept_integer_http_statuses()
 apply_coverage_v2()
 apply_coverage_query_v2()
 apply_coverage_view_compat()
+apply_about_methodology()
 install_public_intelligence_ui()
