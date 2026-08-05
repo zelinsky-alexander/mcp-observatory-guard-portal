@@ -1,4 +1,4 @@
-"""Combined public About and Methodology page and legacy-route redirect."""
+"""Combined public About page with highlighted methodology and legacy redirect."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ LEGACY_METHODOLOGY_PATH = "/methodology"
 
 
 def apply_about_methodology() -> None:
-    """Install one combined information page and remove duplicate navigation."""
+    """Install one About page and remove duplicate Methodology navigation."""
     from . import app, views
 
     if getattr(app.PortalHandler._dispatch, "_combined_about_methodology", False):
@@ -35,8 +35,7 @@ def apply_about_methodology() -> None:
             '<a href="/about">About</a>'
             '<a href="/methodology">Methodology</a>'
         )
-        combined_link = '<a href="/about">About and Methodology</a>'
-        return html.replace(separate_links, combined_link)
+        return html.replace(separate_links, '<a href="/about">About</a>')
 
     setattr(combined_layout, "_combined_about_methodology", True)
     views.layout = combined_layout
@@ -78,15 +77,15 @@ def apply_about_methodology() -> None:
 
 
 def about_methodology_page(*, public_readonly: bool = False) -> str:
-    """Render project context with methodology as the primary highlighted section."""
+    """Render project context with methodology as the highlighted section."""
     from . import views
 
-    body = """<section class="page-heading"><p class="eyebrow">Independent research project</p><h1>About and Methodology</h1><p>This portal publishes reproducible observations about exact registry records and package artifacts to support inspection, comparison, and correction.</p></section>
+    body = """<section class="page-heading"><p class="eyebrow">Independent research project</p><h1>About</h1><p>This portal publishes reproducible observations about exact registry records and package artifacts to support inspection, comparison, and correction.</p></section>
 <section class="notice methodology-highlight"><p class="eyebrow">Methodology</p><h2>How observations are produced</h2><ol><li><strong>Immutable catalog history.</strong> Registry metadata is imported as immutable, content-addressed history.</li><li><strong>Exact artifact analysis.</strong> Static analysis evaluates an exact package artifact under the analyzer, ruleset, integrity, and network profile recorded with each run.</li><li><strong>Recorded interpretation state.</strong> Findings identify observable patterns and retain their confidence and review disposition.</li></ol><p>The public portal does not execute servers, invoke MCP tools, run analysis, perform runtime discovery, or expose complete source and evidence files. A finding excerpt is displayed only when a dedicated public excerpt was explicitly approved during analysis or review; displayed excerpts are escaped and bounded to 2,048 characters.</p></section>
-<section class="panel"><p class="eyebrow">About</p><h2>Independent MCP ecosystem research</h2><p>This is an independent security research project. It is not affiliated with or endorsed by the Model Context Protocol project, the Official MCP Registry, package registries, or listed publishers.</p><p>Records are presented to support inspection, comparison, and correction. A listing is not a recommendation, certification, accusation, or safety verdict.</p></section>
+<section class="panel"><p class="eyebrow">Project context</p><h2>Independent MCP ecosystem research</h2><p>This is an independent security research project. It is not affiliated with or endorsed by the Model Context Protocol project, the Official MCP Registry, package registries, or listed publishers.</p><p>Records are presented to support inspection, comparison, and correction. A listing is not a recommendation, certification, accusation, or safety verdict.</p></section>
 <section class="panel"><h2>Interpretation boundary</h2><p>Results describe exact records and artifacts under documented analysis profiles. They do not prove safety, malicious intent, publisher identity, or author intent. Absence of a finding does not establish safety, and presence of a finding does not establish malicious intent.</p></section>"""
     return views.layout(
-        "About and Methodology",
+        "About",
         body,
         public_readonly=public_readonly,
     )
