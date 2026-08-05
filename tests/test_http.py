@@ -304,7 +304,6 @@ class HttpTests(unittest.TestCase):
 
         for path, heading in (
             ("/about", "About"),
-            ("/methodology", "Methodology"),
             ("/data-sources", "Data Sources"),
             ("/disclaimer", "Disclaimer"),
             ("/privacy", "Privacy"),
@@ -315,6 +314,16 @@ class HttpTests(unittest.TestCase):
                     page = response.read().decode("utf-8")
                     self.assertEqual(response.status, 200)
                     self.assertIn(f"<h1>{heading}</h1>", page)
+
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=2
+        )
+        connection.request("GET", "/methodology")
+        response = connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 308)
+        self.assertEqual(response.getheader("Location"), "/about")
+        connection.close()
 
         for path in (
             "/findings/1/source",
