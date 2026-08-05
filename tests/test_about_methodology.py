@@ -19,13 +19,13 @@ class AboutMethodologyTests(unittest.TestCase):
         self.assertIs(views.layout, first_layout)
 
         html = views.layout("Test", "<p>body</p>", public_readonly=True)
-        self.assertIn('href="/about">About and Methodology</a>', html)
+        self.assertIn('href="/about">About</a>', html)
         self.assertNotIn('href="/methodology"', html)
         self.assertEqual(html.count('href="/about"'), 2)
 
-    def test_methodology_is_highlighted_on_combined_page(self) -> None:
+    def test_methodology_is_highlighted_on_about_page(self) -> None:
         html = about_methodology_page(public_readonly=True)
-        self.assertIn("<h1>About and Methodology</h1>", html)
+        self.assertIn("<h1>About</h1>", html)
         self.assertIn('class="notice methodology-highlight"', html)
         self.assertIn("<h2>How observations are produced</h2>", html)
         self.assertIn("Immutable catalog history", html)
@@ -39,7 +39,8 @@ class AboutMethodologyTests(unittest.TestCase):
         html = app.information_page(ABOUT_PATH, public_readonly=True)
         self.assertIsNotNone(html)
         assert html is not None
-        self.assertIn("About and Methodology", html)
+        self.assertIn("<h1>About</h1>", html)
+        self.assertIn("Methodology", html)
         self.assertIsNone(
             app.information_page(
                 LEGACY_METHODOLOGY_PATH,
