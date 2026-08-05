@@ -6,6 +6,7 @@ from typing import Any
 from .branding import apply_branding
 from .coverage_query_v2 import apply_coverage_query_v2
 from .coverage_v2 import apply_coverage_v2
+from .coverage_view_compat import apply_coverage_view_compat
 from .public_ui import install_public_intelligence_ui
 
 __version__ = "0.1.0"
@@ -41,4 +42,5 @@ apply_branding()
 _accept_integer_http_statuses()
 apply_coverage_v2()
 apply_coverage_query_v2()
+apply_coverage_view_compat()
 install_public_intelligence_ui()
