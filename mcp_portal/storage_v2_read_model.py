@@ -83,9 +83,9 @@ def _coverage_row(connection: Any) -> Any:
         row = connection.execute(
             """SELECT c.*
                FROM analysis_v2_coverage_summary c
-               JOIN static_analysis_schedule_current current
-                 ON current.profile_key=c.profile_key
-               WHERE current.singleton=1"""
+               JOIN static_analysis_schedule_current cur
+                 ON cur.profile_key=c.profile_key
+               WHERE cur.singleton=1"""
         ).fetchone()
         if row is not None:
             return row
@@ -185,8 +185,6 @@ def dashboard(self: Any, *, recent_limit: int = 12) -> dict[str, Any]:
                 ).fetchall()
             )
         elif status.get("analysis_available"):
-            # Compatibility fallback for a non-v2 catalog. Bound recent runs
-            # before joining findings, matching the pre-existing hotfix.
             counts = connection.execute(
                 """SELECT SUM(status='completed') completed,
                           SUM(status='failed') failed,
