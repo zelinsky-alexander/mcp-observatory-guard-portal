@@ -8,6 +8,7 @@ from .branding import apply_branding
 from .coverage_query_v2 import apply_coverage_query_v2
 from .coverage_v2 import apply_coverage_v2
 from .coverage_view_compat import apply_coverage_view_compat
+from .performance_hotfix import apply_performance_hotfix
 from .public_ui import install_public_intelligence_ui
 
 __version__ = "0.1.0"
@@ -45,4 +46,5 @@ apply_coverage_v2()
 apply_coverage_query_v2()
 apply_coverage_view_compat()
 apply_about_methodology()
+apply_performance_hotfix()
 install_public_intelligence_ui()
