@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fixture_catalog import create_fixture
 from mcp_portal.catalog import Catalog
@@ -117,8 +119,10 @@ CREATE TABLE storage_v2_hot_catalog_info(
 class StorageV2ReadModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.database = Path(self.temporary.name) / "catalog.sqlite"
+        self.database = Path(self.temporary.name) / "hot.sqlite"
+        self.history = Path(self.temporary.name) / "history.sqlite"
         create_fixture(self.database)
+        create_fixture(self.history)
         db = sqlite3.connect(self.database)
         db.executescript(V2_SCHEMA)
         db.execute("INSERT INTO storage_v2_info VALUES(1,2,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
@@ -149,7 +153,7 @@ class StorageV2ReadModelTests(unittest.TestCase):
         db.execute(
             "INSERT INTO storage_v2_hot_catalog_info VALUES(1,CURRENT_TIMESTAMP,'summaries-only',1,1,1,1)"
         )
-        # Simulate the compact hot catalog: the raw detail tables are empty.
+        # Simulate the compact hot catalog: raw detail rows are absent.
         db.execute("DELETE FROM analysis_findings")
         db.execute("DELETE FROM analysis_files")
         db.execute("DELETE FROM analysis_evidence")
@@ -159,12 +163,13 @@ class StorageV2ReadModelTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_dashboard_uses_v2_counts_when_raw_findings_are_absent(self) -> None:
+    def test_dashboard_uses_run_summaries_when_raw_findings_are_absent(self) -> None:
         result = Catalog(self.database).dashboard()
         self.assertTrue(result["schema"]["storage_v2_available"])
         self.assertTrue(result["schema"]["storage_v2_hot_catalog"])
-        self.assertEqual(result["analysis"]["completed"], 3)
-        self.assertEqual(result["analysis"]["failed"], 1)
+        # Dashboard preserves its original run-count semantics.
+        self.assertEqual(result["analysis"]["completed"], 1)
+        self.assertEqual(result["analysis"]["failed"], 0)
         self.assertEqual(result["analysis"]["unreviewed_high_or_critical"], 70)
         self.assertEqual(result["analysis"]["recent"][0]["high_count"], 70)
         self.assertEqual(result["analysis"]["recent"][0]["medium_count"], 150)
@@ -184,6 +189,23 @@ class StorageV2ReadModelTests(unittest.TestCase):
         result = Catalog(self.database).dashboard()
         self.assertEqual(result["totals"]["servers"], 2)
         self.assertEqual(result["totals"]["immutable_versions"], 2)
+
+    def test_detail_reads_can_use_full_history_database(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"MCP_PORTAL_HISTORY_DATABASE": str(self.history)},
+            clear=False,
+        ):
+            catalog = Catalog(self.database)
+            self.assertTrue(catalog.schema_status()["storage_v2_history_available"])
+            detail = catalog.analysis_detail(100)
+            self.assertIsNotNone(detail)
+            assert detail is not None
+            self.assertEqual(len(detail["findings"]), 1)
+            server = catalog.server_detail("io.example/filesystem")
+            self.assertIsNotNone(server)
+            assert server is not None
+            self.assertEqual(server["versions"][0]["analyses"][0]["finding_count"], 1)
 
 
 if __name__ == "__main__":
