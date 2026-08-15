@@ -10,6 +10,7 @@ from .coverage_v2 import apply_coverage_v2
 from .coverage_view_compat import apply_coverage_view_compat
 from .performance_hotfix import apply_performance_hotfix
 from .public_ui import install_public_intelligence_ui
+from .storage_v2_compat import apply_storage_v2_compat
 from .storage_v2_read_model import apply_storage_v2_read_model
 
 __version__ = "0.1.0"
@@ -52,4 +53,5 @@ apply_performance_hotfix()
 # it keeps the latest-snapshot server search while replacing dashboard/coverage
 # aggregation with compact materialized summaries when the v2 tables are present.
 apply_storage_v2_read_model()
+apply_storage_v2_compat()
 install_public_intelligence_ui()
