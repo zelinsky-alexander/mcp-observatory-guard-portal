@@ -143,7 +143,10 @@ build_portal() {
 }
 
 switch_current() {
-    local root=$1 target=$2 tmp="$root/.current.$$.tmp"
+    local root target tmp
+    root=$1
+    target=$2
+    tmp="$root/.current.$$.tmp"
     rm -f "$tmp"
     ln -s "$target" "$tmp"
     mv -Tf "$tmp" "$root/current"
