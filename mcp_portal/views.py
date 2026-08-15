@@ -69,28 +69,116 @@ def dashboard_page(data: dict[str, Any], *, public_readonly: bool = False) -> st
     return layout("Dashboard", body, public_readonly=public_readonly)
 
 
-def servers_page(result: dict[str, Any], *, public_readonly: bool = False) -> str:
+def servers_page(
+    result: dict[str, Any],
+    *,
+    public_readonly: bool = False,
+) -> str:
     query = result["query"]
     ecosystem = result["ecosystem"]
-    rows = "".join(_browser_server_row(row) for row in result["rows"]) or '<tr><td colspan="6" class="empty">No matching servers.</td></tr>'
-    total_pages = max(1, ceil(result["total"] / result["page_size"]))
-    pagination = _pagination(
-        "/servers", query, result["page"], total_pages, ecosystem=ecosystem
+
+    rows = (
+        "".join(_browser_server_row(row) for row in result["rows"])
+        or '<tr><td colspan="6" class="empty">No matching servers.</td></tr>'
     )
+
+    total_pages = max(
+        1,
+        ceil(result["total"] / result["page_size"]),
+    )
+
+    pagination = _pagination(
+        "/servers",
+        query,
+        result["page"],
+        total_pages,
+        ecosystem=ecosystem,
+    )
+
     ecosystem_input = (
-        f'<input type="hidden" name="ecosystem" value="{escape(ecosystem, quote=True)}">'
+        f'<input type="hidden" name="ecosystem" '
+        f'value="{escape(ecosystem, quote=True)}">'
         if ecosystem
         else ""
     )
+
     filter_summary = ""
+
     if ecosystem:
         filter_summary = (
             f' · ecosystem <code>{escape(ecosystem)}</code> '
             '<a href="/servers">Clear ecosystem filter</a>'
         )
-    return layout("Servers", f"""<section class="page-heading"><p class="eyebrow">Official registry catalog</p><h1>Server browser</h1><p>One row per server identifier, showing its most recently imported metadata variant.</p></section>
-<form class="search" method="get" action="/servers">{ecosystem_input}<label for="q">Search identifiers, descriptions, packages, repositories, and remote URLs</label><div><input id="q" name="q" value="{escape(query)}" maxlength="200" autocomplete="off"><button type="submit">Search</button></div></form>
-<div class="result-summary">{result['total']:,} server identifiers · page {result['page']} of {total_pages}{filter_summary}</div><section class="panel compact"><div class="table-wrap"><table><thead><tr><th>Server</th><th>Latest version</th><th>Versions</th><th>Package</th><th>Repository</th><th>Updated</th></tr></thead><tbody>{rows}</tbody></table></div></section>{pagination}""", public_readonly=public_readonly)
+
+    return layout(
+        "Servers",
+        f"""
+<section class="page-heading">
+    <p class="eyebrow">Official registry catalog</p>
+    <h1>Server browser</h1>
+    <p>
+        One row per server identifier in the latest published snapshot,
+        showing its most recently imported metadata variant.
+    </p>
+</section>
+
+<form class="search" method="get" action="/servers">
+    {ecosystem_input}
+    <label for="q">
+        Search identifiers, descriptions, packages, repositories, and remote URLs
+    </label>
+    <div>
+        <input
+            id="q"
+            name="q"
+            value="{escape(query)}"
+            maxlength="200"
+            autocomplete="off"
+        >
+        <button type="submit">Search</button>
+    </div>
+</form>
+
+<div class="result-summary">
+    {result['total']:,} server identifiers in latest snapshot
+    · page {result['page']} of {total_pages}
+    {filter_summary}
+</div>
+
+<section class="panel compact server-browser-panel">
+    <div class="table-wrap server-browser-table-wrap">
+        <table class="server-browser-table">
+            <colgroup>
+                <col class="server-column">
+                <col class="version-column">
+                <col class="versions-column">
+                <col class="package-column">
+                <col class="repository-column">
+                <col class="updated-column">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>Server</th>
+                    <th>Latest version</th>
+                    <th>Versions</th>
+                    <th>Package</th>
+                    <th>Repository</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{pagination}
+""",
+        public_readonly=public_readonly,
+    )
+
+
 
 
 def ecosystem_report_page(rows: list[dict[str, Any]], *, public_readonly: bool = False) -> str:
