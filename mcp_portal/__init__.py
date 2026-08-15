@@ -9,6 +9,7 @@ from .coverage_query_v2 import apply_coverage_query_v2
 from .coverage_v2 import apply_coverage_v2
 from .coverage_view_compat import apply_coverage_view_compat
 from .performance_hotfix import apply_performance_hotfix
+from .post_v2_bugfixes import apply_post_v2_bugfixes
 from .public_ui import install_public_intelligence_ui
 from .storage_v2_compat import apply_storage_v2_compat
 from .storage_v2_read_model import apply_storage_v2_read_model
@@ -55,3 +56,6 @@ apply_performance_hotfix()
 apply_storage_v2_read_model()
 apply_storage_v2_compat()
 install_public_intelligence_ui()
+# Post-v2 fixes intentionally run last so they see the final public route/read
+# model and can correct public semantics without changing authoritative state.
+apply_post_v2_bugfixes()
