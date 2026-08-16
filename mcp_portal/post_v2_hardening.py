@@ -44,9 +44,8 @@ def apply_post_v2_hardening() -> None:
 
     Catalog.dashboard = dashboard
 
-    # The first post-v2 implementation wrapped a card that could already contain
-    # a detail link, producing invalid nested anchors. Render one large link
-    # instead so the entire KPI card is a valid mobile-sized target.
+    # The three primary inventory/analysis KPI cards are whole-card links. The
+    # existing review-queue card keeps its established detail link semantics.
     dashboard_targets = {
         "Servers": "/servers?scope=all",
         "Immutable records": "/records",
@@ -59,6 +58,16 @@ def apply_post_v2_hardening() -> None:
         detail: str,
         detail_href: str | None = None,
     ) -> str:
+        if label == "Review queue" and detail_href:
+            return (
+                '<article class="card">'
+                f'<span>{escape(str(label))}</span>'
+                f'<strong>{escape(str(value))}</strong>'
+                f'<small><a href="{escape(detail_href, quote=True)}">'
+                f'{escape(str(detail))}</a></small>'
+                '</article>'
+            )
+
         href = detail_href or dashboard_targets.get(label)
         content = (
             '<article class="card">'
