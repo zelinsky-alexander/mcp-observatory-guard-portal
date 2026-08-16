@@ -70,6 +70,9 @@ def apply_post_v2_visual_fixes() -> None:
         )
         html = html.replace(
             '<a class="brand" href="/">MCP Longitudinal Assurance</a>',
+            '<div class="assurance-title-row">'
+            '<span class="assurance-title-marker" aria-hidden="true"></span>'
+            '<div class="assurance-content">'
             f'<a class="brand assurance-brand" href="/">{HEADER_TITLE}</a>',
             1,
         )
@@ -79,12 +82,13 @@ def apply_post_v2_visual_fixes() -> None:
             'behavior over time.</span>'
         )
         context = (
-            f'<span class="tagline assurance-subtitle">{HEADER_SUBTITLE}</span>'
-            '<div class="assurance-source-row">'
+            f'<p class="tagline assurance-subtitle">{HEADER_SUBTITLE}</p>'
+            '</div></div>'
+            '<div class="assurance-content assurance-source-section">'
             '<span class="assurance-source-label">Catalog source</span>'
-            f'<span class="assurance-source-text">{SOURCE_NOTICE}</span>'
+            f'<p class="assurance-source-text">{SOURCE_NOTICE}</p>'
             '</div>'
-            f'<p class="assurance-affiliation">{AFFILIATION_NOTICE}</p>'
+            f'<div class="assurance-content assurance-affiliation">{AFFILIATION_NOTICE}</div>'
         )
         html = html.replace(tagline, context, 1)
         return html
