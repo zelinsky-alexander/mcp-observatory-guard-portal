@@ -8,6 +8,7 @@ from .branding import apply_branding
 from .coverage_query_v2 import apply_coverage_query_v2
 from .coverage_v2 import apply_coverage_v2
 from .coverage_view_compat import apply_coverage_view_compat
+from .hot_list_performance import apply_hot_list_performance
 from .performance_hotfix import apply_performance_hotfix
 from .post_v2_bugfixes import apply_post_v2_bugfixes
 from .post_v2_hardening import apply_post_v2_hardening
@@ -63,6 +64,9 @@ install_public_intelligence_ui()
 apply_post_v2_bugfixes()
 # Compatibility hardening repairs presentation regressions discovered by CI.
 apply_post_v2_hardening()
+# Public lists use the compact hot Storage v2 catalog. History remains the
+# authoritative source for detailed finding/source/evidence reads.
+apply_hot_list_performance()
 # Review-queue performance is the final query layer: aggregate counts stay in
 # the hot v2 catalog while bounded finding detail comes from indexed history.
 apply_review_queue_performance()
