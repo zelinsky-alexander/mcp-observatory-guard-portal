@@ -12,6 +12,7 @@ from .performance_hotfix import apply_performance_hotfix
 from .post_v2_bugfixes import apply_post_v2_bugfixes
 from .post_v2_hardening import apply_post_v2_hardening
 from .public_ui import install_public_intelligence_ui
+from .review_queue_performance import apply_review_queue_performance
 from .storage_v2_compat import apply_storage_v2_compat
 from .storage_v2_read_model import apply_storage_v2_read_model
 
@@ -60,6 +61,8 @@ install_public_intelligence_ui()
 # Post-v2 fixes intentionally run last so they see the final public route/read
 # model and can correct public semantics without changing authoritative state.
 apply_post_v2_bugfixes()
-# Compatibility hardening is deliberately the final layer. It may repair view
-# regressions discovered by CI, but it must not alter catalog/query semantics.
+# Compatibility hardening repairs presentation regressions discovered by CI.
 apply_post_v2_hardening()
+# Review-queue performance is the final query layer: aggregate counts stay in
+# the hot v2 catalog while bounded finding detail comes from indexed history.
+apply_review_queue_performance()
