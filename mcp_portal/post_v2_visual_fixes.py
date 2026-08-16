@@ -6,20 +6,20 @@ from typing import Any
 
 
 FULL_PROJECT_NAME = "MCP Longitudinal Assurance Project"
-INDEPENDENCE_NOTICE = (
-    '<span class="header-disclaimer">'
-    '<strong>Independent security research project.</strong> '
-    'Not affiliated with or endorsed by the Model Context Protocol project, '
-    'the Official MCP Registry, package registries, or listed publishers.'
-    '</span>'
+HEADER_TITLE = "MCP Longitudinal Assurance"
+HEADER_SUBTITLE = (
+    "Independent, evidence-based research into MCP server provenance, artifact identity, "
+    "capability drift, and observed behavior over time."
+)
+AFFILIATION_NOTICE = (
+    "Not affiliated with or endorsed by the Model Context Protocol project, the Official "
+    "MCP Registry, package registries, or listed publishers."
 )
 SOURCE_NOTICE = (
-    '<span class="header-disclaimer">'
-    '<strong>Catalog source:</strong> Official MCP Registry via the official '
-    'Registry REST API. The MCP Longitudinal Assurance Project independently '
-    'preserves publication history and derives analysis, coverage, drift, and '
-    'assurance observations from those records and referenced artifacts.'
-    '</span>'
+    '<strong>Catalog source:</strong> Official MCP Registry via the official Registry REST API. '
+    'The MCP Longitudinal Assurance Project independently preserves publication history and '
+    'derives analysis, coverage, drift, and assurance observations from those records and '
+    'referenced artifacts.'
 )
 
 
@@ -53,9 +53,8 @@ def apply_post_v2_visual_fixes() -> None:
         html = original_layout(title, body, public_readonly=public_readonly)
         html = html.replace("MCPLA", FULL_PROJECT_NAME)
 
-        # Keep the research-independence and Registry-source boundaries visible,
-        # but avoid consuming two full-width rows above every page. Present them
-        # as two distinct compact metadata items in the brand/header area.
+        # Remove the old full-width body notices. Keep the same boundaries in a
+        # compact, readable header stack with deliberately different emphasis.
         legacy_independence = (
             '<aside class="independence-notice"><strong>Independent security '
             'research project.</strong> Not affiliated with or endorsed by the '
@@ -65,19 +64,26 @@ def apply_post_v2_visual_fixes() -> None:
         html = html.replace(legacy_independence, "", 1)
         html = html.replace(bugfixes.PROVENANCE_HTML, "", 1)
 
+        # Normalize the public title and make the project context three separate
+        # lines: research purpose, non-affiliation, and catalog provenance.
+        html = html.replace(
+            '<a class="brand" href="/">MCP Longitudinal Assurance</a>',
+            f'<a class="brand assurance-brand" href="/">{HEADER_TITLE}</a>',
+            1,
+        )
         tagline = (
             '<span class="tagline">Independent, evidence-based research into MCP '
             'server provenance, artifact identity, capability drift, and observed '
             'behavior over time.</span>'
         )
-        metadata = (
-            tagline
-            + '<span class="header-disclaimers" aria-label="Project and source notices">'
-            + INDEPENDENCE_NOTICE
-            + SOURCE_NOTICE
-            + '</span>'
+        context = (
+            f'<span class="tagline assurance-subtitle">{HEADER_SUBTITLE}</span>'
+            '<div class="assurance-header-context" aria-label="Project context and source">'
+            f'<div class="assurance-affiliation">{AFFILIATION_NOTICE}</div>'
+            f'<div class="assurance-source">{SOURCE_NOTICE}</div>'
+            '</div>'
         )
-        html = html.replace(tagline, metadata, 1)
+        html = html.replace(tagline, context, 1)
         return html
 
     setattr(layout, "_post_v2_visual_fixes", True)
@@ -116,9 +122,9 @@ def apply_post_v2_visual_fixes() -> None:
 
     bugfixes.servers_scope_page = servers_scope_page
 
-    # Storage v2 may publish the compact coverage summary without retaining a
-    # row in static_analysis_schedule_current. Resolve the drill-down profile
-    # using exactly the same fallback as the aggregate read model.
+    # Storage v2 keeps the aggregate coverage summary in the compact hot DB but
+    # detailed scheduler-state rows can live only in history. Resolve the active
+    # profile from hot, then read bounded detail from history when configured.
     def coverage_records(
         catalog: Any, *, state: str, page: int, page_size: int
     ) -> dict[str, Any]:
@@ -132,6 +138,8 @@ def apply_post_v2_visual_fixes() -> None:
         if state not in predicates:
             raise ValueError("unsupported coverage state")
 
+        # Profile identity belongs to the hot read model because that is where
+        # the aggregate card values came from.
         with catalog._connect() as connection:
             profile = connection.execute(
                 "SELECT profile_key FROM static_analysis_schedule_current "
@@ -145,17 +153,19 @@ def apply_post_v2_visual_fixes() -> None:
                                 profile_key COLLATE BINARY
                        LIMIT 1"""
                 ).fetchone()
-            if profile is None:
-                return {
-                    "state": state,
-                    "page": 1,
-                    "page_size": page_size,
-                    "total": 0,
-                    "rows": [],
-                }
+        if profile is None:
+            return {
+                "state": state,
+                "page": 1,
+                "page_size": page_size,
+                "total": 0,
+                "rows": [],
+            }
 
-            profile_key = profile["profile_key"]
-            predicate = predicates[state]
+        profile_key = profile["profile_key"]
+        predicate = predicates[state]
+        source = bugfixes._history_catalog(catalog) or catalog
+        with source._connect() as connection:
             total = int(
                 connection.execute(
                     f"SELECT COUNT(*) FROM static_analysis_schedule_state s "
