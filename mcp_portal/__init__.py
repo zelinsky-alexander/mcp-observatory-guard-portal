@@ -12,6 +12,7 @@ from .hot_list_performance import apply_hot_list_performance
 from .performance_hotfix import apply_performance_hotfix
 from .post_v2_bugfixes import apply_post_v2_bugfixes
 from .post_v2_hardening import apply_post_v2_hardening
+from .post_v2_visual_fixes import apply_post_v2_visual_fixes
 from .public_ui import install_public_intelligence_ui
 from .review_queue_performance import apply_review_queue_performance
 from .storage_v2_compat import apply_storage_v2_compat
@@ -70,3 +71,6 @@ apply_hot_list_performance()
 # Review-queue performance is the final query layer: aggregate counts stay in
 # the hot v2 catalog while bounded finding detail comes from indexed history.
 apply_review_queue_performance()
+# Browser-review fixes are deliberately last: wording, selected-scope styling,
+# and Storage-v2 coverage drill-down profile fallback must see the final layers.
+apply_post_v2_visual_fixes()
