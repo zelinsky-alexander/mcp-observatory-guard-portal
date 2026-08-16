@@ -15,6 +15,18 @@ class PostV2VisualFixTests(unittest.TestCase):
         self.assertIn("MCP Longitudinal Assurance Project preserves history", html)
         self.assertNotIn(">MCPLA ", html)
 
+    def test_disclaimers_are_compact_header_items(self) -> None:
+        html = views.layout("Test", "<p>Body</p>", public_readonly=True)
+        self.assertIn('class="header-disclaimers"', html)
+        self.assertEqual(html.count('class="header-disclaimer"'), 2)
+        self.assertIn("Independent security research project.", html)
+        self.assertIn("Catalog source:", html)
+        self.assertNotIn('class="independence-notice"', html)
+        self.assertNotIn('class="provenance-notice"', html)
+        header_end = html.index("</header>")
+        self.assertLess(html.index("Independent security research project."), header_end)
+        self.assertLess(html.index("Catalog source:"), header_end)
+
     def test_server_scope_tabs_are_separated_and_selected(self) -> None:
         result = {
             "scope": "all",
