@@ -1,8 +1,7 @@
 """Small compatibility hardening for post-Storage-v2 portal fixes.
 
 Keep this layer narrow: it repairs compatibility regressions found by CI without
-changing the authoritative catalog/read-model semantics introduced by
-``post_v2_bugfixes``.
+changing authoritative Observatory state.
 """
 
 from __future__ import annotations
@@ -14,9 +13,36 @@ from typing import Any
 def apply_post_v2_hardening() -> None:
     """Install compatibility repairs after the post-v2 bug-fix layer."""
     from . import post_v2_bugfixes, views
+    from .catalog import Catalog
 
     if getattr(post_v2_bugfixes.servers_scope_page, "_post_v2_hardened", False):
         return
+
+    # Dashboard inventory cards now drill into longitudinal views. Keep their
+    # counts longitudinal too, even for non-v2/local fixtures, so card and list
+    # semantics cannot disagree.
+    original_dashboard = Catalog.dashboard
+
+    def dashboard(self: Any, *, recent_limit: int = 12) -> dict[str, Any]:
+        result = original_dashboard(self, recent_limit=recent_limit)
+        with self._connect() as connection:
+            counted = connection.execute(
+                """SELECT COUNT(DISTINCT server_identifier) AS servers,
+                          COUNT(*) AS immutable_versions,
+                          COUNT(DISTINCT canonical_sha256) AS canonical_artifacts
+                   FROM server_versions"""
+            ).fetchone()
+        if counted is not None:
+            result["totals"].update(
+                {
+                    "servers": int(counted["servers"] or 0),
+                    "immutable_versions": int(counted["immutable_versions"] or 0),
+                    "canonical_artifacts": int(counted["canonical_artifacts"] or 0),
+                }
+            )
+        return result
+
+    Catalog.dashboard = dashboard
 
     # The first post-v2 implementation wrapped a card that could already contain
     # a detail link, producing invalid nested anchors. Render one large link
