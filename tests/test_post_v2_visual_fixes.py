@@ -15,33 +15,78 @@ class PostV2VisualFixTests(unittest.TestCase):
         self.assertIn("MCP Longitudinal Assurance Project preserves history", html)
         self.assertNotIn(">MCPLA ", html)
 
-    def test_public_header_has_clear_title_source_and_quiet_affiliation(self) -> None:
+    def test_public_header_has_compact_identity_source_and_quiet_affiliation(self) -> None:
         html = views.layout("Test", "<p>body</p>", public_readonly=True)
         header = html.split("</header>", 1)[0]
-        self.assertIn('class="assurance-header-card"', header)
-        self.assertIn('class="assurance-title-row"', header)
-        self.assertIn('class="assurance-title-marker"', header)
+
         self.assertIn(
-            '<a class="brand assurance-brand" href="/">MCP Longitudinal Assurance</a>',
+            '<header class="site-header compact-header">',
             header,
         )
-        self.assertIn('class="tagline assurance-subtitle"', header)
-        self.assertIn('class="assurance-content assurance-source-section"', header)
-        self.assertIn('class="assurance-source-label">Catalog source</span>', header)
-        self.assertIn('class="assurance-source-text"', header)
-        self.assertIn("Official MCP Registry via the official Registry REST API", header)
-        self.assertIn('class="assurance-content assurance-affiliation"', header)
+        self.assertIn('class="header-main"', header)
+        self.assertIn('class="header-identity"', header)
+        self.assertIn('class="header-title-row"', header)
+
+        self.assertIn(
+            '<a class="header-brand" href="/">MCP Longitudinal Assurance</a>',
+            header,
+        )
+        self.assertIn('class="header-tagline"', header)
+        self.assertIn(
+            "Independent research into MCP server provenance, artifact identity, "
+            "capability drift, and observed behavior over time.",
+            header,
+        )
+
+        self.assertIn(
+            'class="header-nav" aria-label="Primary navigation"',
+            header,
+        )
+
+        self.assertIn('class="header-meta"', header)
+        self.assertIn('class="catalog-source"', header)
+        self.assertIn(
+            'class="catalog-label">Catalog source</span>',
+            header,
+        )
+        self.assertIn(
+            "Official MCP Registry · Registry REST API",
+            header,
+        )
+
+        self.assertIn('class="header-affiliation"', header)
         self.assertIn(
             "Not affiliated with or endorsed by the Model Context Protocol project",
             header,
         )
+
+        self.assertNotIn("assurance-header-card", header)
+        self.assertNotIn("assurance-title-marker", header)
+        self.assertNotIn("assurance-source-section", header)
+        self.assertNotIn("assurance-source-label", header)
+        self.assertNotIn("assurance-source-text", header)
+
         self.assertNotIn(
-            "Not affiliated with or endorsed by the Model Context Protocol project, the Official MCP Registry",
+            "Not affiliated with or endorsed by the Model Context Protocol project, "
+            "the Official MCP Registry",
             header,
         )
         self.assertNotIn("Independent security research project", header)
         self.assertNotIn("provenance-notice", html)
         self.assertNotIn("independence-notice", html)
+
+    def test_public_header_keeps_primary_navigation_inside_main_header_row(self) -> None:
+        html = views.layout("Test", "<p>body</p>", public_readonly=True)
+        header = html.split("</header>", 1)[0]
+
+        main_start = header.index('<div class="header-main">')
+        nav_start = header.index(
+            '<nav class="header-nav" aria-label="Primary navigation">'
+        )
+        meta_start = header.index('<div class="header-meta">')
+
+        self.assertLess(main_start, nav_start)
+        self.assertLess(nav_start, meta_start)
 
     def test_server_scope_tabs_are_separated_and_selected(self) -> None:
         result = {
@@ -116,11 +161,21 @@ class PostV2VisualFixTests(unittest.TestCase):
                         updated_at TEXT NOT NULL
                     );
                     INSERT INTO server_versions VALUES(1, 'io.example/server', '1.0.0');
-                    INSERT INTO packages VALUES(10, 1, '@example/server', '1.0.0', 'npm', 'stdio');
+                    INSERT INTO packages VALUES(
+                        10, 1, '@example/server', '1.0.0', 'npm', 'stdio'
+                    );
                     INSERT INTO static_analysis_schedule_state
-                    VALUES('profile-v2', 10, 'completed', NULL, NULL, 1, 100,
-                           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                           '2026-08-16T10:00:00Z');
+                    VALUES(
+                        'profile-v2',
+                        10,
+                        'completed',
+                        NULL,
+                        NULL,
+                        1,
+                        100,
+                        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                        '2026-08-16T10:00:00Z'
+                    );
                     """
                 )
                 db.commit()
@@ -134,7 +189,10 @@ class PostV2VisualFixTests(unittest.TestCase):
             )
             self.assertEqual(result["total"], 1)
             self.assertEqual(len(result["rows"]), 1)
-            self.assertEqual(result["rows"][0]["package_identifier"], "@example/server")
+            self.assertEqual(
+                result["rows"][0]["package_identifier"],
+                "@example/server",
+            )
 
 
 if __name__ == "__main__":

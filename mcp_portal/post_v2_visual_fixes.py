@@ -8,18 +8,14 @@ from typing import Any
 FULL_PROJECT_NAME = "MCP Longitudinal Assurance Project"
 HEADER_TITLE = "MCP Longitudinal Assurance"
 HEADER_SUBTITLE = (
-    "Independent, evidence-based research into MCP server provenance, artifact identity, "
+    "Independent research into MCP server provenance, artifact identity, "
     "capability drift, and observed behavior over time."
 )
 AFFILIATION_NOTICE = (
     "Not affiliated with or endorsed by the Model Context Protocol project, "
     "package registries, or listed publishers."
 )
-SOURCE_NOTICE = (
-    "Official MCP Registry via the official Registry REST API. The MCP Longitudinal "
-    "Assurance Project independently preserves publication history and derives analysis, "
-    "coverage, drift, and assurance observations from those records and referenced artifacts."
-)
+SOURCE_NOTICE = "Official MCP Registry · Registry REST API"
 
 
 def apply_post_v2_visual_fixes() -> None:
@@ -52,8 +48,8 @@ def apply_post_v2_visual_fixes() -> None:
         html = original_layout(title, body, public_readonly=public_readonly)
         html = html.replace("MCPLA", FULL_PROJECT_NAME)
 
-        # Remove the old full-width notices. Keep the same public boundaries in
-        # a compact header card with provenance above the quieter affiliation note.
+        # Remove the old full-width notices. Preserve the same provenance and
+        # independence boundaries in a compact global header.
         legacy_independence = (
             '<aside class="independence-notice"><strong>Independent security '
             'research project.</strong> Not affiliated with or endorsed by the '
@@ -63,34 +59,55 @@ def apply_post_v2_visual_fixes() -> None:
         html = html.replace(legacy_independence, "", 1)
         html = html.replace(bugfixes.PROVENANCE_HTML, "", 1)
 
+        # Convert the base header into a compact two-row layout:
+        # project identity and primary navigation above, source/affiliation below.
         html = html.replace(
             '<header class="site-header"><div>',
-            '<header class="site-header"><div class="assurance-header-card">',
+            '<header class="site-header compact-header">'
+            '<div class="header-main">'
+            '<div class="header-identity">'
+            '<div class="header-title-row">',
             1,
         )
+
         html = html.replace(
             '<a class="brand" href="/">MCP Longitudinal Assurance</a>',
-            '<div class="assurance-title-row">'
-            '<span class="assurance-title-marker" aria-hidden="true"></span>'
-            '<div class="assurance-content">'
-            f'<a class="brand assurance-brand" href="/">{HEADER_TITLE}</a>',
+            f'<a class="header-brand" href="/">{HEADER_TITLE}</a>',
             1,
         )
+
         tagline = (
             '<span class="tagline">Independent, evidence-based research into MCP '
             'server provenance, artifact identity, capability drift, and observed '
             'behavior over time.</span>'
         )
         context = (
-            f'<p class="tagline assurance-subtitle">{HEADER_SUBTITLE}</p>'
-            '</div></div>'
-            '<div class="assurance-content assurance-source-section">'
-            '<span class="assurance-source-label">Catalog source</span>'
-            f'<p class="assurance-source-text">{SOURCE_NOTICE}</p>'
+            f'<p class="header-tagline">{HEADER_SUBTITLE}</p>'
             '</div>'
-            f'<div class="assurance-content assurance-affiliation">{AFFILIATION_NOTICE}</div>'
         )
         html = html.replace(tagline, context, 1)
+
+        html = html.replace(
+            '<nav aria-label="Primary navigation">',
+            '<nav class="header-nav" aria-label="Primary navigation">',
+            1,
+        )
+
+        html = html.replace(
+            '</nav></header>',
+            '</nav>'
+            '</div>'
+            '<div class="header-meta">'
+            '<div class="catalog-source">'
+            '<span class="catalog-label">Catalog source</span>'
+            f'<span>{SOURCE_NOTICE}</span>'
+            '</div>'
+            f'<div class="header-affiliation">{AFFILIATION_NOTICE}</div>'
+            '</div>'
+            '</header>',
+            1,
+        )
+
         return html
 
     setattr(layout, "_post_v2_visual_fixes", True)
