@@ -6,6 +6,21 @@ from typing import Any
 
 
 FULL_PROJECT_NAME = "MCP Longitudinal Assurance Project"
+INDEPENDENCE_NOTICE = (
+    '<span class="header-disclaimer">'
+    '<strong>Independent security research project.</strong> '
+    'Not affiliated with or endorsed by the Model Context Protocol project, '
+    'the Official MCP Registry, package registries, or listed publishers.'
+    '</span>'
+)
+SOURCE_NOTICE = (
+    '<span class="header-disclaimer">'
+    '<strong>Catalog source:</strong> Official MCP Registry via the official '
+    'Registry REST API. The MCP Longitudinal Assurance Project independently '
+    'preserves publication history and derives analysis, coverage, drift, and '
+    'assurance observations from those records and referenced artifacts.'
+    '</span>'
+)
 
 
 def apply_post_v2_visual_fixes() -> None:
@@ -36,7 +51,34 @@ def apply_post_v2_visual_fixes() -> None:
         public_readonly: bool = False,
     ) -> str:
         html = original_layout(title, body, public_readonly=public_readonly)
-        return html.replace("MCPLA", FULL_PROJECT_NAME)
+        html = html.replace("MCPLA", FULL_PROJECT_NAME)
+
+        # Keep the research-independence and Registry-source boundaries visible,
+        # but avoid consuming two full-width rows above every page. Present them
+        # as two distinct compact metadata items in the brand/header area.
+        legacy_independence = (
+            '<aside class="independence-notice"><strong>Independent security '
+            'research project.</strong> Not affiliated with or endorsed by the '
+            'Model Context Protocol project, the Official MCP Registry, package '
+            'registries, or listed publishers.</aside>'
+        )
+        html = html.replace(legacy_independence, "", 1)
+        html = html.replace(bugfixes.PROVENANCE_HTML, "", 1)
+
+        tagline = (
+            '<span class="tagline">Independent, evidence-based research into MCP '
+            'server provenance, artifact identity, capability drift, and observed '
+            'behavior over time.</span>'
+        )
+        metadata = (
+            tagline
+            + '<span class="header-disclaimers" aria-label="Project and source notices">'
+            + INDEPENDENCE_NOTICE
+            + SOURCE_NOTICE
+            + '</span>'
+        )
+        html = html.replace(tagline, metadata, 1)
+        return html
 
     setattr(layout, "_post_v2_visual_fixes", True)
     views.layout = layout
