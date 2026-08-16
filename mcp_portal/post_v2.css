@@ -15,42 +15,59 @@
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
 }
 
+.assurance-title-row {
+    display: grid;
+    grid-template-columns: 4px minmax(0, 1fr);
+    column-gap: 0.85rem;
+    align-items: start;
+}
+
+.assurance-title-marker {
+    width: 4px;
+    height: 1.65rem;
+    margin-top: 0.15rem;
+    border-radius: 999px;
+    background: #35b7e8;
+}
+
+.assurance-content {
+    margin-left: calc(4px + 0.85rem);
+}
+
+.assurance-title-row .assurance-content {
+    margin-left: 0;
+}
+
 .site-header .assurance-brand {
     display: inline-block;
-    padding-left: 0.7rem;
-    border-left: 4px solid #35b7e8;
     color: #ffffff;
     font-size: 1.42rem;
-    line-height: 1.18;
+    line-height: 1.2;
     font-weight: 750;
     letter-spacing: 0.005em;
 }
 
 .site-header .assurance-subtitle {
     display: block;
-    max-width: 64rem;
-    margin: 0.42rem 0 0 0.95rem;
+    max-width: 70rem;
+    margin: 0.38rem 0 0;
     color: #42c8f5;
     font-size: 0.96rem;
-    line-height: 1.5;
+    line-height: 1.45;
     opacity: 1;
 }
 
-.assurance-source-row {
-    display: flex;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 0.45rem 0.7rem;
-    margin-top: 0.95rem;
+.assurance-source-section {
+    margin-top: 1rem;
     padding-top: 0.8rem;
     border-top: 1px solid rgba(126, 171, 190, 0.18);
 }
 
 .assurance-source-label {
-    flex: 0 0 auto;
-    padding: 0.24rem 0.48rem;
+    display: inline-block;
+    padding: 0.24rem 0.5rem;
     border-radius: 0.3rem;
-    background: rgba(36, 155, 210, 0.14);
+    background: rgba(36, 155, 210, 0.15);
     color: #46c5fa;
     font-size: 0.70rem;
     line-height: 1;
@@ -60,17 +77,18 @@
 }
 
 .assurance-source-text {
-    max-width: 72rem;
-    color: #a9c9da;
+    max-width: 75rem;
+    margin: 0.55rem 0 0;
+    color: #b8d3df;
     font-size: 0.86rem;
-    line-height: 1.5;
+    line-height: 1.48;
 }
 
 .assurance-affiliation {
-    margin: 0.7rem 0 0;
-    padding-top: 0.55rem;
+    margin-top: 0.85rem;
+    padding-top: 0.6rem;
     border-top: 1px solid rgba(126, 171, 190, 0.10);
-    color: #c5a86b;
+    color: #c8a968;
     font-size: 0.72rem;
     line-height: 1.4;
 }
@@ -137,16 +155,10 @@
     }
 
     .site-header .assurance-subtitle {
-        margin-left: 0.85rem;
         font-size: 0.88rem;
     }
 
-    .assurance-source-row {
-        align-items: flex-start;
-    }
-
     .assurance-source-text {
-        flex-basis: 100%;
         font-size: 0.80rem;
     }
 
