@@ -15,17 +15,25 @@ class PostV2VisualFixTests(unittest.TestCase):
         self.assertIn("MCP Longitudinal Assurance Project preserves history", html)
         self.assertNotIn(">MCPLA ", html)
 
-    def test_disclaimers_are_compact_header_items(self) -> None:
-        html = views.layout("Test", "<p>Body</p>", public_readonly=True)
-        self.assertIn('class="header-disclaimers"', html)
-        self.assertEqual(html.count('class="header-disclaimer"'), 2)
-        self.assertIn("Independent security research project.", html)
-        self.assertIn("Catalog source:", html)
-        self.assertNotIn('class="independence-notice"', html)
-        self.assertNotIn('class="provenance-notice"', html)
-        header_end = html.index("</header>")
-        self.assertLess(html.index("Independent security research project."), header_end)
-        self.assertLess(html.index("Catalog source:"), header_end)
+    def test_public_header_has_clear_title_context_and_no_bullet_separator(self) -> None:
+        html = views.layout("Test", "<p>body</p>", public_readonly=True)
+        header = html.split("</header>", 1)[0]
+        self.assertIn(
+            '<a class="brand assurance-brand" href="/">MCP Longitudinal Assurance</a>',
+            header,
+        )
+        self.assertIn('class="tagline assurance-subtitle"', header)
+        self.assertIn('class="assurance-affiliation"', header)
+        self.assertIn(
+            "Not affiliated with or endorsed by the Model Context Protocol project",
+            header,
+        )
+        self.assertIn('class="assurance-source"', header)
+        self.assertIn("<strong>Catalog source:</strong>", header)
+        self.assertNotIn("Independent security research project", header)
+        self.assertNotIn("header-disclaimer", header)
+        self.assertNotIn("provenance-notice", html)
+        self.assertNotIn("independence-notice", html)
 
     def test_server_scope_tabs_are_separated_and_selected(self) -> None:
         result = {
@@ -45,10 +53,13 @@ class PostV2VisualFixTests(unittest.TestCase):
             html,
         )
 
-    def test_coverage_drilldown_falls_back_to_latest_v2_profile(self) -> None:
+    def test_coverage_drilldown_uses_hot_profile_and_history_state_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            database = Path(temporary) / "catalog.sqlite"
-            db = sqlite3.connect(database)
+            root = Path(temporary)
+            hot = root / "hot.sqlite"
+            history = root / "history.sqlite"
+
+            db = sqlite3.connect(hot)
             try:
                 db.executescript(
                     """
@@ -60,6 +71,18 @@ class PostV2VisualFixTests(unittest.TestCase):
                         profile_key TEXT PRIMARY KEY,
                         updated_at TEXT NOT NULL
                     );
+                    INSERT INTO analysis_v2_coverage_summary
+                    VALUES('profile-v2', '2026-08-16T10:00:00Z');
+                    """
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            db = sqlite3.connect(history)
+            try:
+                db.executescript(
+                    """
                     CREATE TABLE server_versions(
                         id INTEGER PRIMARY KEY,
                         server_identifier TEXT NOT NULL,
@@ -84,8 +107,6 @@ class PostV2VisualFixTests(unittest.TestCase):
                         artifact_sha256 TEXT,
                         updated_at TEXT NOT NULL
                     );
-                    INSERT INTO analysis_v2_coverage_summary
-                    VALUES('profile-v2', '2026-08-16T10:00:00Z');
                     INSERT INTO server_versions VALUES(1, 'io.example/server', '1.0.0');
                     INSERT INTO packages VALUES(10, 1, '@example/server', '1.0.0', 'npm', 'stdio');
                     INSERT INTO static_analysis_schedule_state
@@ -98,8 +119,10 @@ class PostV2VisualFixTests(unittest.TestCase):
             finally:
                 db.close()
 
+            catalog = Catalog(hot)
+            catalog._storage_v2_history_path = history
             result = post_v2_bugfixes._coverage_records(
-                Catalog(database), state="completed", page=1, page_size=50
+                catalog, state="completed", page=1, page_size=50
             )
             self.assertEqual(result["total"], 1)
             self.assertEqual(len(result["rows"]), 1)
