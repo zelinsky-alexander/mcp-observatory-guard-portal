@@ -13,10 +13,42 @@ from typing import Any
 
 def apply_post_v2_hardening() -> None:
     """Install compatibility repairs after the post-v2 bug-fix layer."""
-    from . import post_v2_bugfixes
+    from . import post_v2_bugfixes, views
 
     if getattr(post_v2_bugfixes.servers_scope_page, "_post_v2_hardened", False):
         return
+
+    # The first post-v2 implementation wrapped a card that could already contain
+    # a detail link, producing invalid nested anchors. Render one large link
+    # instead so the entire KPI card is a valid mobile-sized target.
+    dashboard_targets = {
+        "Servers": "/servers?scope=all",
+        "Immutable records": "/records",
+        "Completed analyses": "/analyses?status=completed",
+    }
+
+    def card(
+        label: str,
+        value: Any,
+        detail: str,
+        detail_href: str | None = None,
+    ) -> str:
+        href = detail_href or dashboard_targets.get(label)
+        content = (
+            '<article class="card">'
+            f'<span>{escape(str(label))}</span>'
+            f'<strong>{escape(str(value))}</strong>'
+            f'<small>{escape(str(detail))}</small>'
+            '</article>'
+        )
+        if href is None:
+            return content
+        return (
+            f'<a class="card-shell-link" href="{escape(href, quote=True)}">'
+            f'{content}</a>'
+        )
+
+    views._card = card
 
     original_servers_scope_page = post_v2_bugfixes.servers_scope_page
 
