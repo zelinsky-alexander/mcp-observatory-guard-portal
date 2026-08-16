@@ -27,3 +27,32 @@
 .card-shell-link small {
     color: inherit;
 }
+
+.scope-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin: 0 0 1rem;
+}
+
+.scope-tab {
+    display: inline-block;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.scope-tab.active,
+.scope-tab[aria-current="page"] {
+    background: #0f5662;
+    color: #fff;
+    border-color: #0f5662;
+}
+
+.scope-tab:hover,
+.scope-tab:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
