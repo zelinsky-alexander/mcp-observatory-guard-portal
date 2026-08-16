@@ -12,14 +12,13 @@ HEADER_SUBTITLE = (
     "capability drift, and observed behavior over time."
 )
 AFFILIATION_NOTICE = (
-    "Not affiliated with or endorsed by the Model Context Protocol project, the Official "
-    "MCP Registry, package registries, or listed publishers."
+    "Not affiliated with or endorsed by the Model Context Protocol project, "
+    "package registries, or listed publishers."
 )
 SOURCE_NOTICE = (
-    '<strong>Catalog source:</strong> Official MCP Registry via the official Registry REST API. '
-    'The MCP Longitudinal Assurance Project independently preserves publication history and '
-    'derives analysis, coverage, drift, and assurance observations from those records and '
-    'referenced artifacts.'
+    "Official MCP Registry via the official Registry REST API. The MCP Longitudinal "
+    "Assurance Project independently preserves publication history and derives analysis, "
+    "coverage, drift, and assurance observations from those records and referenced artifacts."
 )
 
 
@@ -53,8 +52,8 @@ def apply_post_v2_visual_fixes() -> None:
         html = original_layout(title, body, public_readonly=public_readonly)
         html = html.replace("MCPLA", FULL_PROJECT_NAME)
 
-        # Remove the old full-width body notices. Keep the same boundaries in a
-        # compact, readable header stack with deliberately different emphasis.
+        # Remove the old full-width notices. Keep the same public boundaries in
+        # a compact header card with provenance above the quieter affiliation note.
         legacy_independence = (
             '<aside class="independence-notice"><strong>Independent security '
             'research project.</strong> Not affiliated with or endorsed by the '
@@ -64,8 +63,11 @@ def apply_post_v2_visual_fixes() -> None:
         html = html.replace(legacy_independence, "", 1)
         html = html.replace(bugfixes.PROVENANCE_HTML, "", 1)
 
-        # Normalize the public title and make the project context three separate
-        # lines: research purpose, non-affiliation, and catalog provenance.
+        html = html.replace(
+            '<header class="site-header"><div>',
+            '<header class="site-header"><div class="assurance-header-card">',
+            1,
+        )
         html = html.replace(
             '<a class="brand" href="/">MCP Longitudinal Assurance</a>',
             f'<a class="brand assurance-brand" href="/">{HEADER_TITLE}</a>',
@@ -78,10 +80,11 @@ def apply_post_v2_visual_fixes() -> None:
         )
         context = (
             f'<span class="tagline assurance-subtitle">{HEADER_SUBTITLE}</span>'
-            '<div class="assurance-header-context" aria-label="Project context and source">'
-            f'<div class="assurance-affiliation">{AFFILIATION_NOTICE}</div>'
-            f'<div class="assurance-source">{SOURCE_NOTICE}</div>'
+            '<div class="assurance-source-row">'
+            '<span class="assurance-source-label">Catalog source</span>'
+            f'<span class="assurance-source-text">{SOURCE_NOTICE}</span>'
             '</div>'
+            f'<p class="assurance-affiliation">{AFFILIATION_NOTICE}</p>'
         )
         html = html.replace(tagline, context, 1)
         return html
