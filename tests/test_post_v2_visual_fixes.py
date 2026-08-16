@@ -19,15 +19,18 @@ class PostV2VisualFixTests(unittest.TestCase):
         html = views.layout("Test", "<p>body</p>", public_readonly=True)
         header = html.split("</header>", 1)[0]
         self.assertIn('class="assurance-header-card"', header)
+        self.assertIn('class="assurance-title-row"', header)
+        self.assertIn('class="assurance-title-marker"', header)
         self.assertIn(
             '<a class="brand assurance-brand" href="/">MCP Longitudinal Assurance</a>',
             header,
         )
         self.assertIn('class="tagline assurance-subtitle"', header)
-        self.assertIn('class="assurance-source-row"', header)
+        self.assertIn('class="assurance-content assurance-source-section"', header)
         self.assertIn('class="assurance-source-label">Catalog source</span>', header)
+        self.assertIn('class="assurance-source-text"', header)
         self.assertIn("Official MCP Registry via the official Registry REST API", header)
-        self.assertIn('class="assurance-affiliation"', header)
+        self.assertIn('class="assurance-content assurance-affiliation"', header)
         self.assertIn(
             "Not affiliated with or endorsed by the Model Context Protocol project",
             header,
