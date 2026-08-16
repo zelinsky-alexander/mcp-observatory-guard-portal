@@ -1,0 +1,168 @@
+.provenance-notice {
+    margin: 0 0 1rem;
+    padding: 0.9rem 1rem;
+    border-left: 4px solid currentColor;
+    border-radius: 0.75rem;
+    background: rgba(18, 116, 128, 0.08);
+}
+
+.site-header .assurance-header-card {
+    max-width: 82rem;
+    padding: 1.05rem 1.2rem 0.85rem;
+    border: 1px solid rgba(118, 177, 199, 0.20);
+    border-radius: 0.9rem;
+    background: rgba(8, 24, 33, 0.72);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+.assurance-title-row {
+    display: grid;
+    grid-template-columns: 4px minmax(0, 1fr);
+    column-gap: 0.85rem;
+    align-items: start;
+}
+
+.assurance-title-marker {
+    width: 4px;
+    height: 1.65rem;
+    margin-top: 0.15rem;
+    border-radius: 999px;
+    background: #35b7e8;
+}
+
+.assurance-content {
+    margin-left: calc(4px + 0.85rem);
+}
+
+.assurance-title-row .assurance-content {
+    margin-left: 0;
+}
+
+.site-header .assurance-brand {
+    display: inline-block;
+    color: #ffffff;
+    font-size: 1.42rem;
+    line-height: 1.2;
+    font-weight: 750;
+    letter-spacing: 0.005em;
+}
+
+.site-header .assurance-subtitle {
+    display: block;
+    max-width: 70rem;
+    margin: 0.38rem 0 0;
+    color: #42c8f5;
+    font-size: 0.96rem;
+    line-height: 1.45;
+    opacity: 1;
+}
+
+.assurance-source-section {
+    margin-top: 1rem;
+    padding-top: 0.8rem;
+    border-top: 1px solid rgba(126, 171, 190, 0.18);
+}
+
+.assurance-source-label {
+    display: inline-block;
+    padding: 0.24rem 0.5rem;
+    border-radius: 0.3rem;
+    background: rgba(36, 155, 210, 0.15);
+    color: #46c5fa;
+    font-size: 0.70rem;
+    line-height: 1;
+    font-weight: 750;
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+}
+
+.assurance-source-text {
+    max-width: 75rem;
+    margin: 0.55rem 0 0;
+    color: #b8d3df;
+    font-size: 0.86rem;
+    line-height: 1.48;
+}
+
+.assurance-affiliation {
+    margin-top: 0.85rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid rgba(126, 171, 190, 0.10);
+    color: #c8a968;
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+.card-shell-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 1.2rem;
+}
+
+.card-shell-link > .card {
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.card-shell-link:hover > .card,
+.card-shell-link:focus-visible > .card {
+    outline: 3px solid currentColor;
+    outline-offset: 2px;
+}
+
+.card-shell-link small {
+    color: inherit;
+}
+
+.scope-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin: 0 0 1rem;
+}
+
+.scope-tab {
+    display: inline-block;
+    padding: 0.55rem 0.8rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.scope-tab.active,
+.scope-tab[aria-current="page"] {
+    background: #0f5662;
+    color: #fff;
+    border-color: #0f5662;
+}
+
+.scope-tab:hover,
+.scope-tab:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+    .site-header .assurance-header-card {
+        padding: 0.9rem 0.95rem 0.75rem;
+        border-radius: 0.7rem;
+    }
+
+    .site-header .assurance-brand {
+        font-size: 1.20rem;
+    }
+
+    .site-header .assurance-subtitle {
+        font-size: 0.88rem;
+    }
+
+    .assurance-source-text {
+        font-size: 0.80rem;
+    }
+
+    .assurance-affiliation {
+        font-size: 0.68rem;
+    }
+}

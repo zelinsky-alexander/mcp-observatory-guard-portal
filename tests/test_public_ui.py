@@ -97,19 +97,34 @@ class PublicIntelligenceViewTests(unittest.TestCase):
         self.assertIn("exact immutable server-version records", html.lower())
         self.assertIn("do not by themselves prove", html)
 
-    def test_coverage_does_not_present_overlapping_counts_as_a_partition(self) -> None:
+    def test_coverage_distinguishes_operational_and_planned_layers(self) -> None:
         html = coverage_page(
             {
                 "package_records": 100,
+                "eligible_package_records": 100,
                 "analyzed_package_records": 25,
                 "failed_package_records": 10,
-                "never_analyzed_package_records": 70,
+                "unsupported_or_unresolvable_package_records": 5,
+                "never_analyzed_package_records": 65,
+                "unique_artifacts_analyzed": 22,
+                "runtime_discovery": {
+                    "available": False,
+                    "completed": 0,
+                    "eligible": 70,
+                },
+                "human_review": {
+                    "available": True,
+                    "reviewed": 2,
+                    "total": 1000,
+                },
             },
             public_readonly=True,
         )
         self.assertIn("25.0%", html)
-        self.assertIn("Failed at least once", html)
-        self.assertIn("not mutually exclusive", html)
+        self.assertIn("Failed attempts", html)
+        self.assertIn("Planned next", html)
+        self.assertIn("Planned later", html)
+        self.assertNotIn("Human-review coverage", html)
         self.assertIn("not a safety certification", html)
 
 

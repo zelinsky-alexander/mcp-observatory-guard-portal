@@ -299,7 +299,10 @@ class HttpTests(unittest.TestCase):
             self.assertIn("f" * 64, body)
             self.assertNotIn("/findings/1/source", body)
             self.assertNotIn('action="/review-requests"', body)
-            self.assertIn("Independent security research project", body)
+            self.assertIn(
+                "Not affiliated with or endorsed by the Model Context Protocol project",
+                body,
+            )
             self.assertNotIn('href="/jobs"', body)
 
         for path, heading in (

@@ -16,8 +16,9 @@ class LargeCatalogReadTests(unittest.TestCase):
         create_fixture(self.database)
 
         # Add longitudinal history that is deliberately not a member of the
-        # latest published snapshot. Common public list/dashboard queries must
-        # not grow with this historical-only data.
+        # latest published snapshot. The default server list stays bounded to
+        # the current snapshot, while dashboard inventory KPIs intentionally
+        # report all retained longitudinal history and drill into that scope.
         connection = sqlite3.connect(self.database)
         connection.execute(
             """INSERT INTO server_versions VALUES(
@@ -37,10 +38,10 @@ class LargeCatalogReadTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_dashboard_totals_are_latest_snapshot_totals(self) -> None:
+    def test_dashboard_totals_are_longitudinal_inventory_totals(self) -> None:
         result = self.catalog.dashboard()
-        self.assertEqual(result["totals"]["servers"], 2)
-        self.assertEqual(result["totals"]["immutable_versions"], 2)
+        self.assertEqual(result["totals"]["servers"], 3)
+        self.assertEqual(result["totals"]["immutable_versions"], 3)
 
     def test_server_list_excludes_historical_only_versions(self) -> None:
         result = self.catalog.search_servers("", page=1, page_size=20)
