@@ -6,6 +6,27 @@
     background: rgba(18, 116, 128, 0.08);
 }
 
+.header-disclaimers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
+    margin-top: 0.35rem;
+    font-size: 0.78rem;
+    line-height: 1.35;
+    opacity: 0.88;
+}
+
+.header-disclaimer {
+    display: inline;
+    max-width: 72rem;
+}
+
+.header-disclaimer + .header-disclaimer::before {
+    content: "•";
+    margin-right: 0.6rem;
+    opacity: 0.7;
+}
+
 .card-shell-link {
     display: block;
     color: inherit;
