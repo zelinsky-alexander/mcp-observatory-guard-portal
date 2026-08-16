@@ -6,25 +6,43 @@
     background: rgba(18, 116, 128, 0.08);
 }
 
-.header-disclaimers {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem 1rem;
-    margin-top: 0.35rem;
-    font-size: 0.78rem;
+.site-header .assurance-brand {
+    display: block;
+    font-size: 1.28rem;
+    line-height: 1.15;
+    font-weight: 750;
+    letter-spacing: 0.01em;
+    color: #ffffff;
+}
+
+.site-header .assurance-subtitle {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.96rem;
     line-height: 1.35;
-    opacity: 0.88;
+    color: #a8e5ec;
+    opacity: 1;
 }
 
-.header-disclaimer {
-    display: inline;
-    max-width: 72rem;
+.assurance-header-context {
+    display: grid;
+    gap: 0.18rem;
+    margin-top: 0.38rem;
+    max-width: 82rem;
+    font-size: 0.84rem;
+    line-height: 1.35;
 }
 
-.header-disclaimer + .header-disclaimer::before {
-    content: "•";
-    margin-right: 0.6rem;
-    opacity: 0.7;
+.assurance-affiliation {
+    color: #f0cf88;
+}
+
+.assurance-source {
+    color: #c3dfe4;
+}
+
+.assurance-source strong {
+    color: #ffffff;
 }
 
 .card-shell-link {
@@ -76,4 +94,18 @@
 .scope-tab:focus-visible {
     outline: 2px solid currentColor;
     outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+    .site-header .assurance-brand {
+        font-size: 1.16rem;
+    }
+
+    .site-header .assurance-subtitle {
+        font-size: 0.9rem;
+    }
+
+    .assurance-header-context {
+        font-size: 0.8rem;
+    }
 }
