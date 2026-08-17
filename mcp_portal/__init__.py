@@ -15,6 +15,7 @@ from .post_v2_hardening import apply_post_v2_hardening
 from .post_v2_visual_fixes import apply_post_v2_visual_fixes
 from .public_ui import install_public_intelligence_ui
 from .review_queue_performance import apply_review_queue_performance
+from .runtime_coverage_v1 import apply_runtime_coverage_v1
 from .storage_v2_compat import apply_storage_v2_compat
 from .storage_v2_read_model import apply_storage_v2_read_model
 
@@ -74,3 +75,6 @@ apply_review_queue_performance()
 # Browser-review fixes are deliberately last: wording, selected-scope styling,
 # and Storage-v2 coverage drill-down profile fallback must see the final layers.
 apply_post_v2_visual_fixes()
+# Runtime coverage is layered last because it depends on the final Storage v2
+# read model and must remain a read-only public view over already-published data.
+apply_runtime_coverage_v1()
