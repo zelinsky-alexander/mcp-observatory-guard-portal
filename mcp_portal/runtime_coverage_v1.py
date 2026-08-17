@@ -27,7 +27,9 @@ def apply_runtime_coverage_v1() -> None:
     def analysis_coverage(self: Any) -> dict[str, Any]:
         result = original_analysis_coverage(self)
         with self._connect() as connection:
-            result["runtime_discovery"] = _runtime_metrics(connection)
+            result["runtime_discovery"] = _runtime_metrics(
+                connection, fallback=result.get("runtime_discovery")
+            )
         return result
 
     public_intelligence.PublicIntelligence.analysis_coverage = analysis_coverage
@@ -37,8 +39,9 @@ def apply_runtime_coverage_v1() -> None:
     def coverage_page(data: dict[str, Any], *, public_readonly: bool = False) -> str:
         html = original_coverage_page(data, public_readonly=public_readonly)
         runtime = data.get("runtime_discovery") or {}
-        panel = _runtime_coverage_panel(runtime)
-        return html.replace("</main>", panel + "</main>", 1)
+        return html.replace(
+            "</main>", _runtime_coverage_panel(runtime) + "</main>", 1
+        )
 
     public_ui.coverage_page = coverage_page
 
@@ -139,14 +142,60 @@ def _tables(connection: sqlite3.Connection) -> set[str]:
     }
 
 
-def _runtime_metrics(connection: sqlite3.Connection) -> dict[str, Any]:
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {
+        str(row["name"])
+        for row in connection.execute(f"PRAGMA table_info({table})")
+    }
+
+
+def _has_columns(
+    connection: sqlite3.Connection, table: str, required: set[str]
+) -> bool:
+    return table in _tables(connection) and required.issubset(
+        _columns(connection, table)
+    )
+
+
+def _runtime_metrics(
+    connection: sqlite3.Connection,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return runtime metrics while tolerating older compact/test schemas."""
+    fallback = dict(fallback or {})
     tables = _tables(connection)
     schedule_tables = {
         "runtime_discovery_schedule_profiles",
         "runtime_discovery_schedule_current",
         "runtime_discovery_schedule_state",
     }
-    if schedule_tables.issubset(tables):
+    state_columns = {
+        "profile_key",
+        "state",
+        "attempt_count",
+        "artifact_sha256",
+        "previous_compatible_run_id",
+        "added_tools",
+        "removed_tools",
+        "modified_tools",
+    }
+    profile_columns = {
+        "profile_key",
+        "scheduler_version",
+        "guard_sha256",
+        "runtime_image",
+        "probe_profile_sha256",
+        "runner_sha256",
+    }
+    if (
+        schedule_tables.issubset(tables)
+        and state_columns.issubset(
+            _columns(connection, "runtime_discovery_schedule_state")
+        )
+        and profile_columns.issubset(
+            _columns(connection, "runtime_discovery_schedule_profiles")
+        )
+    ):
         profile = connection.execute(
             """SELECT p.profile_key,p.scheduler_version,p.guard_sha256,
                       p.runtime_image,p.probe_profile_sha256,p.runner_sha256
@@ -190,36 +239,57 @@ def _runtime_metrics(connection: sqlite3.Connection) -> dict[str, Any]:
                 "profile": dict(profile),
             }
 
-    eligible = int(
-        connection.execute(
-            """SELECT COUNT(*) FROM packages
-               WHERE registry_type='npm' AND transport='stdio'
-                 AND version IS NOT NULL AND trim(version)<>''"""
-        ).fetchone()[0]
-    )
-    completed = 0
-    unique_artifacts = 0
+    package_columns = _columns(connection, "packages") if "packages" in tables else set()
+    eligible = int(fallback.get("eligible", 0) or 0)
+    if {"registry_type", "transport", "version"}.issubset(package_columns):
+        eligible = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM packages
+                   WHERE registry_type='npm' AND transport='stdio'
+                     AND version IS NOT NULL AND trim(version)<>''"""
+            ).fetchone()[0]
+        )
+
+    completed = int(fallback.get("completed", 0) or 0)
+    unique_artifacts = int(fallback.get("unique_artifacts", 0) or 0)
+    available = bool(fallback.get("available", False))
     if "runtime_observation_runs" in tables:
-        row = connection.execute(
-            """SELECT COUNT(DISTINCT package_id) completed,
-                      COUNT(DISTINCT artifact_sha256) unique_artifacts
-               FROM runtime_observation_runs WHERE status='completed'"""
-        ).fetchone()
-        completed = int(row["completed"] or 0)
-        unique_artifacts = int(row["unique_artifacts"] or 0)
+        run_columns = _columns(connection, "runtime_observation_runs")
+        if {"package_id", "status"}.issubset(run_columns):
+            completed = int(
+                connection.execute(
+                    """SELECT COUNT(DISTINCT package_id)
+                       FROM runtime_observation_runs WHERE status='completed'"""
+                ).fetchone()[0]
+            )
+            if "artifact_sha256" in run_columns:
+                unique_artifacts = int(
+                    connection.execute(
+                        """SELECT COUNT(DISTINCT artifact_sha256)
+                           FROM runtime_observation_runs
+                           WHERE status='completed' AND artifact_sha256 IS NOT NULL"""
+                    ).fetchone()[0]
+                )
+            available = True
+
     return {
-        "available": "runtime_observation_runs" in tables,
+        "available": available,
         "scheduled": False,
         "eligible": eligible,
         "completed": completed,
-        "failed": 0,
-        "unsupported_or_unresolvable": 0,
-        "never_attempted": max(0, eligible - completed),
-        "running": 0,
+        "failed": int(fallback.get("failed", 0) or 0),
+        "unsupported_or_unresolvable": int(
+            fallback.get("unsupported_or_unresolvable", 0) or 0
+        ),
+        "never_attempted": int(
+            fallback.get("never_attempted", max(0, eligible - completed))
+            or 0
+        ),
+        "running": int(fallback.get("running", 0) or 0),
         "unique_artifacts": unique_artifacts,
-        "comparable": 0,
-        "drifted": 0,
-        "profile": None,
+        "comparable": int(fallback.get("comparable", 0) or 0),
+        "drifted": int(fallback.get("drifted", 0) or 0),
+        "profile": fallback.get("profile"),
     }
 
 
@@ -241,7 +311,22 @@ def _runtime_drift_list(
         "server_versions",
         "packages",
     }
-    if not required.issubset(tables):
+    state_columns = {
+        "profile_key",
+        "state",
+        "runtime_observation_run_id",
+        "previous_compatible_run_id",
+        "added_tools",
+        "removed_tools",
+        "modified_tools",
+        "unchanged_tools",
+    }
+    if (
+        not required.issubset(tables)
+        or not state_columns.issubset(
+            _columns(connection, "runtime_discovery_schedule_state")
+        )
+    ):
         return {"page": page, "page_size": page_size, "total": 0, "rows": []}
     current = connection.execute(
         "SELECT profile_key FROM runtime_discovery_schedule_current WHERE singleton=1"
@@ -314,6 +399,20 @@ def _runtime_drift_detail(
         "packages",
     }
     if not required.issubset(_tables(connection)):
+        return None
+    state_columns = {
+        "profile_key",
+        "state",
+        "runtime_observation_run_id",
+        "previous_compatible_run_id",
+        "added_tools",
+        "removed_tools",
+        "modified_tools",
+        "unchanged_tools",
+    }
+    if not state_columns.issubset(
+        _columns(connection, "runtime_discovery_schedule_state")
+    ):
         return None
     current = connection.execute(
         "SELECT profile_key FROM runtime_discovery_schedule_current WHERE singleton=1"
