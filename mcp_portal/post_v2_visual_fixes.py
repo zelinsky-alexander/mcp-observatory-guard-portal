@@ -146,9 +146,9 @@ def apply_post_v2_visual_fixes() -> None:
 
     bugfixes.servers_scope_page = servers_scope_page
 
-    # Storage v2 keeps the aggregate coverage summary in the compact hot DB but
-    # detailed scheduler-state rows can live only in history. Resolve the active
-    # profile from hot, then read bounded detail from history when configured.
+    # Coverage cards and scheduler-state drill-down rows describe the current
+    # analysis profile, so both are served from the compact hot read model.
+    # History remains the source for genuinely longitudinal detail views.
     def coverage_records(
         catalog: Any, *, state: str, page: int, page_size: int
     ) -> dict[str, Any]:
@@ -162,8 +162,6 @@ def apply_post_v2_visual_fixes() -> None:
         if state not in predicates:
             raise ValueError("unsupported coverage state")
 
-        # Profile identity belongs to the hot read model because that is where
-        # the aggregate card values came from.
         with catalog._connect() as connection:
             profile = connection.execute(
                 "SELECT profile_key FROM static_analysis_schedule_current "
@@ -188,8 +186,7 @@ def apply_post_v2_visual_fixes() -> None:
 
         profile_key = profile["profile_key"]
         predicate = predicates[state]
-        source = bugfixes._history_catalog(catalog) or catalog
-        with source._connect() as connection:
+        with catalog._connect() as connection:
             total = int(
                 connection.execute(
                     f"SELECT COUNT(*) FROM static_analysis_schedule_state s "
