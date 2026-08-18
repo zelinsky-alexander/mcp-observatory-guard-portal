@@ -2,8 +2,8 @@
 """Bounded UX smoke crawler for public portal navigation.
 
 The crawler starts at the supplied site root, follows each same-origin HTTP(S)
-destination once, reports broken/dead/duplicate destinations, and records
-external links without requesting them.
+destination once, reports broken/dead/same-page duplicate destinations, and
+records external links without requesting them.
 
 This implementation intentionally uses only Python's standard library.
 """
@@ -18,12 +18,12 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 
 DEFAULT_TIMEOUT_SECONDS = 10.0
 DEFAULT_MAX_PAGES = 500
-USER_AGENT = "MCP-Assurance-Site-UX-Smoke/1.0"
+USER_AGENT = "MCP-Assurance-Site-UX-Smoke/1.1"
 NAV_ROLES = {"link", "menuitem"}
 PLACEHOLDER_SCHEMES = {"javascript"}
 NON_HTTP_SCHEMES = {"mailto", "tel", "sms"}
@@ -80,7 +80,6 @@ class NavigationParser(html.parser.HTMLParser):
             kind = f"role:{attr_map.get('role', '').lower()}"
             destination = attr_map.get("href") or attr_map.get("data-href") or ""
         elif "data-href" in attr_map:
-            # Common pattern for a whole card made clickable by JavaScript.
             kind = "clickable-card"
             destination = attr_map.get("data-href", "")
 
@@ -167,12 +166,13 @@ def normalize_http_destination(base_url: str, raw: str) -> tuple[str | None, str
         (scheme, parsed.netloc.lower(), parsed.path or "/", parsed.query, "")
     )
 
+    base_parsed = urllib.parse.urlsplit(base_url)
     base_without_fragment = urllib.parse.urlunsplit(
         (
-            urllib.parse.urlsplit(base_url).scheme.lower(),
-            urllib.parse.urlsplit(base_url).netloc.lower(),
-            urllib.parse.urlsplit(base_url).path or "/",
-            urllib.parse.urlsplit(base_url).query,
+            base_parsed.scheme.lower(),
+            base_parsed.netloc.lower(),
+            base_parsed.path or "/",
+            base_parsed.query,
             "",
         )
     )
@@ -190,7 +190,10 @@ def same_origin(url: str, root: str) -> bool:
 def request_page(url: str, timeout: float) -> tuple[PageResult, str | None]:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1"},
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        },
         method="GET",
     )
     try:
@@ -210,7 +213,9 @@ def request_page(url: str, timeout: float) -> tuple[PageResult, str | None]:
         return PageResult(url, None, None, str(exc), None), None
 
 
-def crawl(root: str, *, timeout: float, max_pages: int) -> tuple[list[PageResult], list[DiscoveredControl]]:
+def crawl(
+    root: str, *, timeout: float, max_pages: int
+) -> tuple[list[PageResult], list[DiscoveredControl], bool]:
     queue = collections.deque([root])
     queued = {root}
     visited: set[str] = set()
@@ -232,8 +237,10 @@ def crawl(root: str, *, timeout: float, max_pages: int) -> tuple[list[PageResult
         try:
             parser.feed(html_text)
             parser.close()
-        except Exception as exc:  # malformed HTML should be visible but not crash the whole crawl
-            controls.append(DiscoveredControl(url, "parser", str(exc), "", None, "html-parse-error"))
+        except Exception as exc:
+            controls.append(
+                DiscoveredControl(url, "parser", str(exc), "", None, "html-parse-error")
+            )
             continue
 
         for kind, text, raw_destination in parser.controls:
@@ -247,44 +254,79 @@ def crawl(root: str, *, timeout: float, max_pages: int) -> tuple[list[PageResult
                 queue.append(normalized)
                 queued.add(normalized)
 
-    return pages, controls
+    return pages, controls, bool(queue)
 
 
-def build_summary(pages: list[PageResult], controls: list[DiscoveredControl]) -> dict[str, object]:
+def find_same_page_duplicates(
+    controls: list[DiscoveredControl],
+) -> dict[tuple[str, str], list[DiscoveredControl]]:
+    by_page_destination: dict[tuple[str, str], list[DiscoveredControl]] = collections.defaultdict(list)
+    for control in controls:
+        if control.classification == "internal" and control.normalized_destination:
+            key = (control.page, control.normalized_destination)
+            by_page_destination[key].append(control)
+    return {key: items for key, items in by_page_destination.items() if len(items) > 1}
+
+
+def build_summary(
+    pages: list[PageResult], controls: list[DiscoveredControl], *, crawl_limit_reached: bool = False
+) -> dict[str, object]:
     broken_pages = [page for page in pages if page.broken]
     dead_controls = [
         control
         for control in controls
         if control.classification
-        in {"empty", "placeholder-fragment", "javascript-placeholder", "unsupported-scheme", "html-parse-error"}
+        in {
+            "empty",
+            "placeholder-fragment",
+            "javascript-placeholder",
+            "unsupported-scheme",
+            "html-parse-error",
+        }
     ]
     external = [control for control in controls if control.classification == "external"]
-    same_page = [control for control in controls if control.classification == "same-page-fragment"]
-
-    destination_sources: dict[str, list[DiscoveredControl]] = collections.defaultdict(list)
-    for control in controls:
-        if control.classification == "internal" and control.normalized_destination:
-            destination_sources[control.normalized_destination].append(control)
-    duplicates = {destination: items for destination, items in destination_sources.items() if len(items) > 1}
+    unique_external = sorted(
+        {
+            control.normalized_destination
+            for control in external
+            if control.normalized_destination is not None
+        }
+    )
+    same_page_fragments = [
+        control for control in controls if control.classification == "same-page-fragment"
+    ]
+    duplicates = find_same_page_duplicates(controls)
 
     return {
         "pages_checked": len(pages),
         "controls_found": len(controls),
         "broken_pages": broken_pages,
         "dead_controls": dead_controls,
-        "same_page_fragments": same_page,
+        "same_page_fragments": same_page_fragments,
         "external_links": external,
-        "duplicate_internal_destinations": duplicates,
+        "unique_external_destinations": unique_external,
+        "same_page_duplicate_destinations": duplicates,
+        "crawl_limit_reached": crawl_limit_reached,
     }
 
 
-def print_report(root: str, pages: list[PageResult], controls: list[DiscoveredControl]) -> None:
-    summary = build_summary(pages, controls)
+def print_report(
+    root: str,
+    pages: list[PageResult],
+    controls: list[DiscoveredControl],
+    *,
+    crawl_limit_reached: bool,
+    verbose: bool,
+) -> None:
+    summary = build_summary(pages, controls, crawl_limit_reached=crawl_limit_reached)
     broken_pages: list[PageResult] = summary["broken_pages"]  # type: ignore[assignment]
     dead_controls: list[DiscoveredControl] = summary["dead_controls"]  # type: ignore[assignment]
     same_page: list[DiscoveredControl] = summary["same_page_fragments"]  # type: ignore[assignment]
     external: list[DiscoveredControl] = summary["external_links"]  # type: ignore[assignment]
-    duplicates: dict[str, list[DiscoveredControl]] = summary["duplicate_internal_destinations"]  # type: ignore[assignment]
+    unique_external: list[str] = summary["unique_external_destinations"]  # type: ignore[assignment]
+    duplicates: dict[tuple[str, str], list[DiscoveredControl]] = summary[
+        "same_page_duplicate_destinations"
+    ]  # type: ignore[assignment]
 
     print(f"Site UX smoke report: {root}")
     print("=" * 72)
@@ -293,16 +335,20 @@ def print_report(root: str, pages: list[PageResult], controls: list[DiscoveredCo
     print(f"Broken internal destinations: {len(broken_pages)}")
     print(f"Dead/placeholder controls: {len(dead_controls)}")
     print(f"Same-page fragments: {len(same_page)}")
-    print(f"External links recorded: {len(external)}")
-    print(f"Duplicate internal destinations: {len(duplicates)}")
+    print(f"External link occurrences: {len(external)}")
+    print(f"Unique external destinations: {len(unique_external)}")
+    print(f"Same-page duplicate destinations: {len(duplicates)}")
+    print(f"Crawl limit reached: {'yes' if crawl_limit_reached else 'no'}")
 
-    print("\nInternal pages")
-    for page in pages:
-        marker = "BROKEN" if page.broken else "OK"
-        status = "ERR" if page.status is None else str(page.status)
-        redirect = f" -> {page.final_url}" if page.final_url and page.final_url != page.url else ""
-        detail = f" ({page.error})" if page.error else ""
-        print(f"  {marker:6} {status:>3} {page.url}{redirect}{detail}")
+    if crawl_limit_reached:
+        print("WARNING: crawl stopped at --max-pages; not all discovered internal pages were checked.")
+
+    if broken_pages:
+        print("\nBroken internal destinations")
+        for page in broken_pages:
+            status = "ERR" if page.status is None else str(page.status)
+            detail = f" ({page.error})" if page.error else ""
+            print(f"  {status:>3} {page.url}{detail}")
 
     if dead_controls:
         print("\nDead / placeholder controls")
@@ -316,32 +362,65 @@ def print_report(root: str, pages: list[PageResult], controls: list[DiscoveredCo
             print(f"  {item.page} :: {(item.text or '<no label>')!r} -> {item.raw_destination!r}")
 
     if duplicates:
-        print("\nDuplicate internal destinations")
-        for destination, items in sorted(duplicates.items()):
-            print(f"  {destination} ({len(items)} controls)")
+        print("\nSame-page duplicate destinations")
+        for (page, destination), items in sorted(duplicates.items()):
+            print(f"  {page} -> {destination} ({len(items)} controls)")
             for item in items[:8]:
-                print(f"    - {item.page} :: {(item.text or '<no label>')!r}")
+                print(f"    - {(item.text or '<no label>')!r} [{item.kind}]")
             if len(items) > 8:
                 print(f"    - ... {len(items) - 8} more")
 
-    if external:
-        print("\nExternal links (recorded, not requested)")
-        for item in external:
-            print(f"  {item.page} :: {(item.text or '<no label>')!r} -> {item.normalized_destination}")
+    if verbose:
+        print("\nInternal pages")
+        for page in pages:
+            marker = "BROKEN" if page.broken else "OK"
+            status = "ERR" if page.status is None else str(page.status)
+            redirect = f" -> {page.final_url}" if page.final_url and page.final_url != page.url else ""
+            detail = f" ({page.error})" if page.error else ""
+            print(f"  {marker:6} {status:>3} {page.url}{redirect}{detail}")
+
+        if external:
+            print("\nExternal links (recorded, not requested)")
+            for item in external:
+                print(
+                    f"  {item.page} :: {(item.text or '<no label>')!r} -> "
+                    f"{item.normalized_destination}"
+                )
 
 
-def json_payload(root: str, pages: list[PageResult], controls: list[DiscoveredControl]) -> dict[str, object]:
-    summary = build_summary(pages, controls)
-    duplicates = summary["duplicate_internal_destinations"]
+def json_payload(
+    root: str,
+    pages: list[PageResult],
+    controls: list[DiscoveredControl],
+    *,
+    crawl_limit_reached: bool,
+) -> dict[str, object]:
+    summary = build_summary(pages, controls, crawl_limit_reached=crawl_limit_reached)
+    duplicates = summary["same_page_duplicate_destinations"]
     assert isinstance(duplicates, dict)
     return {
         "root": root,
+        "summary": {
+            "pages_checked": summary["pages_checked"],
+            "controls_found": summary["controls_found"],
+            "broken_internal_destinations": len(summary["broken_pages"]),  # type: ignore[arg-type]
+            "dead_placeholder_controls": len(summary["dead_controls"]),  # type: ignore[arg-type]
+            "same_page_fragments": len(summary["same_page_fragments"]),  # type: ignore[arg-type]
+            "external_link_occurrences": len(summary["external_links"]),  # type: ignore[arg-type]
+            "unique_external_destinations": len(summary["unique_external_destinations"]),  # type: ignore[arg-type]
+            "same_page_duplicate_destinations": len(duplicates),
+            "crawl_limit_reached": crawl_limit_reached,
+        },
         "pages": [asdict(page) | {"broken": page.broken} for page in pages],
         "controls": [asdict(control) for control in controls],
-        "duplicate_internal_destinations": {
-            destination: [asdict(item) for item in items]
-            for destination, items in duplicates.items()
-        },
+        "same_page_duplicate_destinations": [
+            {
+                "page": page,
+                "destination": destination,
+                "controls": [asdict(item) for item in items],
+            }
+            for (page, destination), items in sorted(duplicates.items())
+        ],
     }
 
 
@@ -351,6 +430,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     parser.add_argument("--json", dest="json_path", help="Also write the complete report as JSON")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print every checked internal page and every external-link occurrence",
+    )
     parser.add_argument(
         "--fail-on-broken",
         action="store_true",
@@ -371,15 +455,33 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    pages, controls = crawl(root, timeout=args.timeout, max_pages=args.max_pages)
-    print_report(root, pages, controls)
+    pages, controls, crawl_limit_reached = crawl(
+        root, timeout=args.timeout, max_pages=args.max_pages
+    )
+    print_report(
+        root,
+        pages,
+        controls,
+        crawl_limit_reached=crawl_limit_reached,
+        verbose=args.verbose,
+    )
 
     if args.json_path:
         with open(args.json_path, "w", encoding="utf-8") as handle:
-            json.dump(json_payload(root, pages, controls), handle, indent=2, sort_keys=True)
+            json.dump(
+                json_payload(
+                    root,
+                    pages,
+                    controls,
+                    crawl_limit_reached=crawl_limit_reached,
+                ),
+                handle,
+                indent=2,
+                sort_keys=True,
+            )
             handle.write("\n")
 
-    summary = build_summary(pages, controls)
+    summary = build_summary(pages, controls, crawl_limit_reached=crawl_limit_reached)
     if args.fail_on_broken and (summary["broken_pages"] or summary["dead_controls"]):
         return 1
     return 0
