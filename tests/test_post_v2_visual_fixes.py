@@ -106,7 +106,7 @@ class PostV2VisualFixTests(unittest.TestCase):
             html,
         )
 
-    def test_coverage_drilldown_uses_hot_profile_and_hot_state_rows(self) -> None:
+    def test_coverage_drilldown_uses_hot_profile_and_history_state_rows(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             hot = root / "hot.sqlite"
@@ -152,16 +152,6 @@ class PostV2VisualFixTests(unittest.TestCase):
                     VALUES(1, 'profile-v2');
                     INSERT INTO analysis_v2_coverage_summary
                     VALUES('profile-v2', '2026-08-18T10:00:00Z');
-                    INSERT INTO server_versions
-                    VALUES(1, 'io.example/hot-server', '2.0.0');
-                    INSERT INTO packages
-                    VALUES(10, 1, '@example/hot-server', '2.0.0', 'npm', 'stdio');
-                    INSERT INTO static_analysis_schedule_state
-                    VALUES(
-                        'profile-v2', 10, 'completed', NULL, NULL, 1, 100,
-                        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-                        '2026-08-18T10:00:00Z'
-                    );
                     """
                 )
                 db.commit()
@@ -204,7 +194,7 @@ class PostV2VisualFixTests(unittest.TestCase):
                     VALUES(
                         'profile-v2', 20, 'completed', NULL, NULL, 1, 200,
                         'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-                        '2026-08-16T10:00:00Z'
+                        '2026-08-18T10:00:00Z'
                     );
                     """
                 )
@@ -220,10 +210,6 @@ class PostV2VisualFixTests(unittest.TestCase):
             self.assertEqual(result["total"], 1)
             self.assertEqual(len(result["rows"]), 1)
             self.assertEqual(
-                result["rows"][0]["package_identifier"],
-                "@example/hot-server",
-            )
-            self.assertNotEqual(
                 result["rows"][0]["package_identifier"],
                 "@example/history-server",
             )
