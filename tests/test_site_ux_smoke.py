@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import http.server
+import io
 import threading
 import unittest
 
@@ -25,7 +27,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 </body></html>
                 """,
             ),
-            "/good": (200, "text/html; charset=utf-8", '<a href="/leaf">Leaf</a>'),
+            "/good": (
+                200,
+                "text/html; charset=utf-8",
+                '<a href="/leaf">Leaf</a><a href="/good">Self</a>',
+            ),
             "/card": (200, "text/html; charset=utf-8", "<p>Card page</p>"),
             "/role-link": (200, "text/html; charset=utf-8", "<p>Role page</p>"),
             "/leaf": (200, "text/plain; charset=utf-8", "leaf"),
@@ -61,8 +67,12 @@ class SiteUxSmokeTests(unittest.TestCase):
         cls.server.server_close()
 
     def test_crawl_records_navigation_and_broken_destinations(self) -> None:
-        pages, controls = site_ux_smoke.crawl(self.root, timeout=2, max_pages=20)
-        summary = site_ux_smoke.build_summary(pages, controls)
+        pages, controls, crawl_limit_reached = site_ux_smoke.crawl(
+            self.root, timeout=2, max_pages=20
+        )
+        summary = site_ux_smoke.build_summary(
+            pages, controls, crawl_limit_reached=crawl_limit_reached
+        )
 
         page_statuses = {page.url: page.status for page in pages}
         self.assertEqual(page_statuses[self.root], 200)
@@ -70,24 +80,85 @@ class SiteUxSmokeTests(unittest.TestCase):
         self.assertEqual(page_statuses[self.root + "card"], 200)
         self.assertEqual(page_statuses[self.root + "role-link"], 200)
 
+        self.assertFalse(crawl_limit_reached)
         self.assertEqual(len(summary["broken_pages"]), 1)
         self.assertTrue(
-            any(item.classification == "placeholder-fragment" for item in summary["dead_controls"])
+            any(
+                item.classification == "placeholder-fragment"
+                for item in summary["dead_controls"]
+            )
         )
         self.assertTrue(
-            any(item.normalized_destination == "https://example.org/reference" for item in summary["external_links"])
+            any(
+                item.normalized_destination == "https://example.org/reference"
+                for item in summary["external_links"]
+            )
         )
-        self.assertIn(self.root + "good", summary["duplicate_internal_destinations"])
+        duplicate_key = (self.root, self.root + "good")
+        self.assertIn(duplicate_key, summary["same_page_duplicate_destinations"])
+        self.assertEqual(len(summary["same_page_duplicate_destinations"]), 1)
+        self.assertEqual(summary["unique_external_destinations"], ["https://example.org/reference"])
+
+    def test_repeated_destination_on_different_pages_is_not_a_duplicate(self) -> None:
+        controls = [
+            site_ux_smoke.DiscoveredControl(
+                "https://example.test/a",
+                "a",
+                "Shared",
+                "/shared",
+                "https://example.test/shared",
+                "internal",
+            ),
+            site_ux_smoke.DiscoveredControl(
+                "https://example.test/b",
+                "a",
+                "Shared",
+                "/shared",
+                "https://example.test/shared",
+                "internal",
+            ),
+        ]
+        self.assertEqual(site_ux_smoke.find_same_page_duplicates(controls), {})
+
+    def test_compact_report_does_not_list_every_success_or_external_link(self) -> None:
+        pages, controls, crawl_limit_reached = site_ux_smoke.crawl(
+            self.root, timeout=2, max_pages=20
+        )
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            site_ux_smoke.print_report(
+                self.root,
+                pages,
+                controls,
+                crawl_limit_reached=crawl_limit_reached,
+                verbose=False,
+            )
+        report = output.getvalue()
+        self.assertIn("Broken internal destinations: 1", report)
+        self.assertIn("Same-page duplicate destinations: 1", report)
+        self.assertNotIn("\nInternal pages\n", report)
+        self.assertNotIn("External links (recorded, not requested)", report)
+
+    def test_crawl_reports_when_page_limit_is_reached(self) -> None:
+        pages, _, crawl_limit_reached = site_ux_smoke.crawl(
+            self.root, timeout=2, max_pages=1
+        )
+        self.assertEqual(len(pages), 1)
+        self.assertTrue(crawl_limit_reached)
 
     def test_normalization_flags_empty_and_javascript_targets(self) -> None:
-        self.assertEqual(site_ux_smoke.normalize_http_destination(self.root, ""), (None, "empty"))
+        self.assertEqual(
+            site_ux_smoke.normalize_http_destination(self.root, ""), (None, "empty")
+        )
         self.assertEqual(
             site_ux_smoke.normalize_http_destination(self.root, "javascript:void(0)"),
             (None, "javascript-placeholder"),
         )
 
     def test_root_requires_http_url(self) -> None:
-        self.assertEqual(site_ux_smoke.normalize_site_root("example.test"), "https://example.test/")
+        self.assertEqual(
+            site_ux_smoke.normalize_site_root("example.test"), "https://example.test/"
+        )
         with self.assertRaises(ValueError):
             site_ux_smoke.normalize_site_root("file:///tmp/index.html")
 
