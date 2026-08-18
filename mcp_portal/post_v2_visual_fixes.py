@@ -146,9 +146,9 @@ def apply_post_v2_visual_fixes() -> None:
 
     bugfixes.servers_scope_page = servers_scope_page
 
-    # Coverage cards and scheduler-state drill-down rows describe the current
-    # analysis profile, so both are served from the compact hot read model.
-    # History remains the source for genuinely longitudinal detail views.
+    # Storage v2 publishes aggregate coverage and the active profile to the hot
+    # read model, but intentionally compacts scheduler-state detail out of hot.
+    # Resolve the active profile from hot and serve bounded detail from history.
     def coverage_records(
         catalog: Any, *, state: str, page: int, page_size: int
     ) -> dict[str, Any]:
@@ -186,7 +186,8 @@ def apply_post_v2_visual_fixes() -> None:
 
         profile_key = profile["profile_key"]
         predicate = predicates[state]
-        with catalog._connect() as connection:
+        source = bugfixes._history_catalog(catalog) or catalog
+        with source._connect() as connection:
             total = int(
                 connection.execute(
                     f"SELECT COUNT(*) FROM static_analysis_schedule_state s "
