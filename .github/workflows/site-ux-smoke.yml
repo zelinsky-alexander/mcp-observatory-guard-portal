@@ -1,0 +1,61 @@
+name: Site UX Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: Public site root to crawl
+        required: true
+        default: https://mcp-assurance.zelinsky-alexander.workers.dev/
+        type: string
+      fail_on_broken:
+        description: Fail the workflow for broken internal destinations or dead controls
+        required: true
+        default: true
+        type: boolean
+      max_pages:
+        description: Maximum same-origin pages to crawl
+        required: true
+        default: "500"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Crawl public navigation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run site UX smoke crawler
+        shell: bash
+        run: |
+          args=(
+            "${{ inputs.site_url }}"
+            --max-pages "${{ inputs.max_pages }}"
+            --json site-ux-smoke-report.json
+          )
+          if [[ "${{ inputs.fail_on_broken }}" == "true" ]]; then
+            args+=(--fail-on-broken)
+          fi
+          python scripts/site_ux_smoke.py "${args[@]}" | tee site-ux-smoke-report.txt
+
+      - name: Upload smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-ux-smoke-report
+          path: |
+            site-ux-smoke-report.txt
+            site-ux-smoke-report.json
+          if-no-files-found: warn

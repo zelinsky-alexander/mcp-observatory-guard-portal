@@ -146,9 +146,9 @@ def apply_post_v2_visual_fixes() -> None:
 
     bugfixes.servers_scope_page = servers_scope_page
 
-    # Storage v2 keeps the aggregate coverage summary in the compact hot DB but
-    # detailed scheduler-state rows can live only in history. Resolve the active
-    # profile from hot, then read bounded detail from history when configured.
+    # Storage v2 publishes aggregate coverage and the active profile to the hot
+    # read model, but intentionally compacts scheduler-state detail out of hot.
+    # Resolve the active profile from hot and serve bounded detail from history.
     def coverage_records(
         catalog: Any, *, state: str, page: int, page_size: int
     ) -> dict[str, Any]:
@@ -162,8 +162,6 @@ def apply_post_v2_visual_fixes() -> None:
         if state not in predicates:
             raise ValueError("unsupported coverage state")
 
-        # Profile identity belongs to the hot read model because that is where
-        # the aggregate card values came from.
         with catalog._connect() as connection:
             profile = connection.execute(
                 "SELECT profile_key FROM static_analysis_schedule_current "
