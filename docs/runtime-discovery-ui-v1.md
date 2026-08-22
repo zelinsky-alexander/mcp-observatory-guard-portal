@@ -1,5 +1,15 @@
 # Runtime discovery UI v1
 
+Runtime discovery has two deliberately separate presentation paths:
+
+1. private/local on-demand orchestration through the existing durable portal queue;
+2. public read-only coverage and tool-definition drift derived only from observations
+   already published in the hot catalog.
+
+Neither path runs analysis inline in an HTTP request.
+
+## Private/local on-demand discovery
+
 Runtime discovery is exposed through the existing loopback-only portal and its
 durable worker queue. It does not run a second HTTP process.
 
@@ -28,3 +38,25 @@ The HTTP request returns after queueing. The worker bounds child output, applies
 total timeout, terminates the process group, and verifies the resulting authoritative
 observation row before completing the portal-owned job. Non-loopback deployment still
 requires authentication, enforced rate limits, leases, and worker-host isolation.
+
+## Public automatic coverage
+
+When Storage v2 publishes `runtime_discovery_schedule_*`,
+`runtime_observation_runs`, and `runtime_observation_tools` into the hot read model,
+public mode exposes only bounded read-only summaries:
+
+- `/coverage` shows eligible, completed, failed, unsupported/unresolvable,
+  never-attempted, running, comparable, and drifted observation counts for the
+  current scheduler profile;
+- `/runtime-drift` lists completed observations whose canonical interface changed
+  from the previous compatible server version;
+- `/runtime-drift/<newer-run-id>` shows added, removed, and modified tool names plus
+  bounded definition-hash identities and observation provenance.
+
+These routes never open the portal jobs database, never read runtime evidence files,
+and never enable a public execution or review endpoint. The existing raw
+`/runtime-observations/<id>` route remains unavailable in public-readonly mode.
+
+A modified tool means the complete canonical tool object differs. Runtime discovery
+uses `initialize`, `notifications/initialized`, and `tools/list` only; it does not
+invoke tools and does not establish that a server is safe or malicious.
