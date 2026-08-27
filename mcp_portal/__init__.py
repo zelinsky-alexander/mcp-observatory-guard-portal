@@ -25,7 +25,12 @@ __version__ = "0.1.0"
 
 
 def _accept_integer_http_statuses() -> None:
-    """Normalize extension-route integer statuses to ``HTTPStatus`` values."""
+    """Normalize extension-route integer statuses to ``HTTPStatus`` values.
+
+    The core response helpers use ``HTTPStatus`` and access ``status.value``.
+    Public intelligence routes historically passed integer status codes. Keep
+    the boundary strict while accepting those route values in one place.
+    """
     from . import app
 
     original = app.PortalHandler._send_html
@@ -52,16 +57,32 @@ apply_coverage_query_v2()
 apply_coverage_view_compat()
 apply_about_methodology()
 apply_performance_hotfix()
+# Storage v2 deliberately applies after the legacy coverage/performance patches:
+# it keeps the latest-snapshot server search while replacing dashboard/coverage
+# aggregation with compact materialized summaries when the v2 tables are present.
 apply_storage_v2_read_model()
 apply_storage_v2_compat()
 install_public_intelligence_ui()
+# Post-v2 fixes intentionally run last so they see the final public route/read
+# model and can correct public semantics without changing authoritative state.
 apply_post_v2_bugfixes()
+# Compatibility hardening repairs presentation regressions discovered by CI.
 apply_post_v2_hardening()
+# Public lists use the compact hot Storage v2 catalog. History remains the
+# authoritative source for detailed finding/source/evidence reads.
 apply_hot_list_performance()
+# Review-queue performance is the final query layer: aggregate counts stay in
+# the hot v2 catalog while bounded finding detail comes from indexed history.
 apply_review_queue_performance()
+# Browser-review fixes are deliberately last: wording, selected-scope styling,
+# and Storage-v2 coverage drill-down profile fallback must see the final layers.
 apply_post_v2_visual_fixes()
+# Runtime coverage is layered last because it depends on the final Storage v2
+# read model and must remain a read-only public view over already-published data.
 apply_runtime_coverage_v1()
+# Outcome semantics extend runtime coverage without changing the authoritative
+# scheduler: blocked and inconclusive are presented separately from true failures.
 apply_runtime_outcomes_v2()
-# Declared-remote coverage is the final read-only layer. It exposes only already
-# published scheduler/observation summaries and cannot start probes from HTTP.
+# Declared remote coverage is a final read-only view over runtime records already
+# published by the trusted runtime scheduler; it exposes no probe submission path.
 apply_remote_runtime_coverage_v1()
