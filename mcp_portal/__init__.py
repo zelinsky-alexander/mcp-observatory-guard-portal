@@ -14,6 +14,7 @@ from .post_v2_bugfixes import apply_post_v2_bugfixes
 from .post_v2_hardening import apply_post_v2_hardening
 from .post_v2_visual_fixes import apply_post_v2_visual_fixes
 from .public_ui import install_public_intelligence_ui
+from .remote_runtime_coverage_v1 import apply_remote_runtime_coverage_v1
 from .review_queue_performance import apply_review_queue_performance
 from .runtime_coverage_v1 import apply_runtime_coverage_v1
 from .runtime_outcomes_v2 import apply_runtime_outcomes_v2
@@ -82,3 +83,6 @@ apply_runtime_coverage_v1()
 # Outcome semantics extend runtime coverage without changing the authoritative
 # scheduler: blocked and inconclusive are presented separately from true failures.
 apply_runtime_outcomes_v2()
+# Declared remote coverage is a final read-only view over runtime records already
+# published by the trusted runtime scheduler; it exposes no probe submission path.
+apply_remote_runtime_coverage_v1()
